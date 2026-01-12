@@ -365,7 +365,7 @@ function isReportEmpty(report: AiReport) {
 }
 
 function buildReportFromContext(context: ContextData): AiReport {
-  const restaurants = context.pois.restaurants.map((item) => ({
+  const restaurants: PoiItem[] = context.pois.restaurants.map((item) => ({
     name: item.name,
     distance_m: item.distance_m,
     rating: item.rating ?? null,
@@ -373,25 +373,33 @@ function buildReportFromContext(context: ContextData): AiReport {
     price_range: null,
   }))
 
-  const ocioBars = context.pois.bars_and_clubs.map((item) => ({
+  const ocioBars: Array<PoiItem & { type: "bar" | "club" }> =
+    context.pois.bars_and_clubs.map((item) => ({
     name: item.name,
     distance_m: item.distance_m,
-    type: (item.type === "club" ? "club" : "bar") as const,
+    type: item.type === "club" ? "club" : "bar",
   }))
 
-  const ocioCafes = context.pois.cafes.map((item) => ({
+  const ocioCafes: Array<PoiItem & { type: "cafe" }> =
+    context.pois.cafes.map((item) => ({
     name: item.name,
     distance_m: item.distance_m,
     type: "cafe" as const,
   }))
 
-  const ocioFastFood = context.pois.restaurants
+  const ocioFastFood: Array<PoiItem & { type: "fast_food" }> = context.pois.restaurants
     .filter((item) => item.type === "fast_food")
     .map((item) => ({
       name: item.name,
       distance_m: item.distance_m,
       type: "fast_food" as const,
     }))
+
+  const ocioInmediato: Array<
+    PoiItem & { type: "bar" | "club" | "cafe" | "fast_food" }
+  > = [...ocioBars, ...ocioCafes, ...ocioFastFood].sort(
+    (a, b) => a.distance_m - b.distance_m
+  )
 
   const totalPois =
     restaurants.length +
@@ -413,9 +421,7 @@ function buildReportFromContext(context: ContextData): AiReport {
     summary_general:
       "Resumen basado en datos OSM sin procesamiento IA. Las secciones muestran datos reales cercanos.",
     restaurants_nearby: restaurants,
-    ocio_inmediato: [...ocioBars, ...ocioCafes, ...ocioFastFood].sort(
-      (a, b) => a.distance_m - b.distance_m
-    ),
+    ocio_inmediato: ocioInmediato,
     services: {
       pharmacies: context.pois.pharmacies.map((item) => ({
         name: item.name,

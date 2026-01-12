@@ -149,10 +149,10 @@ function buildFallbackReportFromContext(
   const ocio = [
     ...bars.map((item) => {
       const source = rawBars.find((poi) => poi?.name === item.name)
-      const type = source?.type === "club" ? "club" : "bar"
+      const type: "bar" | "club" = source?.type === "club" ? "club" : "bar"
       return { ...item, type }
     }),
-    ...cafes.map((item) => ({ ...item, type: "cafe" as const })),
+    ...cafes.map((item) => ({ ...item, type: "cafe" })),
     ...restaurants
       .filter((item) => {
         const source = rawRestaurants.find(
@@ -160,8 +160,8 @@ function buildFallbackReportFromContext(
         )
         return source?.type === "fast_food"
       })
-      .map((item) => ({ ...item, type: "fast_food" as const })),
-  ].sort((a, b) => a.distance_m - b.distance_m)
+      .map((item) => ({ ...item, type: "fast_food" })),
+  ].sort((a, b) => a.distance_m - b.distance_m) as AiReport["ocio_inmediato"]
 
   const summaryParts = [
     `Restaurantes: ${restaurants.length}`,

@@ -1,33 +1,33 @@
 "use client"
 
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Circle,
   MapContainer,
   Marker,
-  Popup,
   TileLayer,
-  Tooltip,
+  Tooltip as LeafletTooltip,
+  WMSTileLayer,
   useMapEvent,
 } from "react-leaflet"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import L, { type LeafletMouseEvent } from "leaflet"
-import SidePanel, { type SidePanelData } from "@/components/SidePanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
+import { toast } from "@/lib/ui/toast"
+import { type AiReport, type ContextData } from "@/lib/types"
+import RightPanel from "@/components/RightPanel"
+import SearchBar from "@/components/SearchBar"
+import { type LayerKey, type LayerState } from "@/components/LayerControls"
 import {
   Copy,
   Eraser,
-  Github,
   Loader2,
   LocateFixed,
   MapPin,
@@ -35,16 +35,17 @@ import {
 
 const RADIUS_OPTIONS = [500, 800, 1200, 2000]
 
-function ClickHandler({
-  onClick,
-}: {
-  onClick: (lat: number, lon: number) => void
-}) {
-  useMapEvent("click", (event: LeafletMouseEvent) => {
-    onClick(event.latlng.lat, event.latlng.lng)
-  })
-  return null
-}
+const OSM_TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+const IGN_WMS_URL = "https://www.ign.es/wms-inspire/ign-base"
+const IGN_WMS_LAYER = "IGNBaseTodo"
+const PNOA_WMS_URL = "https://www.ign.es/wms-inspire/pnoa-ma"
+const PNOA_WMS_LAYER = "OI.OrthoimageCoverage"
+const CLC_WMS_URL =
+  "https://image.discomap.eea.europa.eu/arcgis/services/Corine/CLC2018_WM/MapServer/WMSServer"
+const CLC_WMS_LAYER = "13"
+const FLOOD_WMS_URL =
+  "https://servicios.mapama.gob.es/arcgis/services/Agua/Riesgo/MapServer/WMSServer"
+const FLOOD_WMS_LAYER = "AreaImp_100"
 
 type MapInnerProps = {
   initialLat?: number | null
@@ -56,15 +57,41 @@ type AnalyzeResponse = {
   ok: boolean
   request_id?: number | null
   placeName?: string | null
-  contextData?: SidePanelData["context"] | null
+  contextData?: ContextData | null
   overpass_ok?: boolean
   overpass_error?: string | null
+  flood_ok?: boolean
+  flood_error?: string | null
+  flood_status?: "OK" | "DOWN"
   status?: "OK" | "NO_POIS" | "OVERPASS_DOWN"
-  aiReport?: SidePanelData["report"]
-  fallbackReport?: SidePanelData["report"] | null
+  aiReport?: AiReport | null
+  fallbackReport?: AiReport | null
   warnings?: string[]
   warning?: string | null
   error?: string
+}
+
+type PanelData = {
+  placeName: string | null
+  report: AiReport | null
+  aiReport: AiReport | null
+  context: ContextData | null
+  warning: string | null
+  coords: { lat: number; lon: number } | null
+  requestId: number | null
+  status: "OK" | "NO_POIS" | "OVERPASS_DOWN" | null
+  overpassOk: boolean | null
+  overpassError: string | null
+  floodOk: boolean | null
+  floodError: string | null
+  floodStatus: "OK" | "DOWN" | null
+}
+
+function ClickHandler({ onClick }: { onClick: (lat: number, lon: number) => void }) {
+  useMapEvent("click", (event: LeafletMouseEvent) => {
+    onClick(event.latlng.lat, event.latlng.lng)
+  })
+  return null
 }
 
 export default function MapInner({
@@ -83,14 +110,7 @@ export default function MapInner({
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
     "idle"
   )
-  const [activePoi, setActivePoi] = useState<{
-    name: string
-    lat: number
-    lon: number
-    distance_m?: number
-    type?: string
-  } | null>(null)
-  const [panelData, setPanelData] = useState<SidePanelData>({
+  const [panelData, setPanelData] = useState<PanelData>({
     placeName: null,
     report: null,
     aiReport: null,
@@ -101,28 +121,38 @@ export default function MapInner({
     status: null,
     overpassOk: null,
     overpassError: null,
+    floodOk: null,
+    floodError: null,
+    floodStatus: null,
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [copyNotice, setCopyNotice] = useState<string | null>(null)
+  const [searchValue, setSearchValue] = useState("")
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [layers, setLayers] = useState<LayerState>({
+    osm: true,
+    ign: false,
+    pnoa: false,
+    clc: false,
+    flood: false,
+  })
+
   const abortRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef(0)
-  const lastGoodRef = useRef<SidePanelData | null>(null)
+  const lastGoodRef = useRef<PanelData | null>(null)
   const mapRef = useRef<L.Map | null>(null)
-  const poiMarkerRef = useRef<L.Marker | null>(null)
   const autoAnalyzeRef = useRef(false)
 
   const initialCenter = useMemo<[number, number]>(() => {
     if (typeof initialLat === "number" && typeof initialLon === "number") {
       return [initialLat, initialLon]
     }
-    return [38.9607, 1.4138]
+    return [40.4168, -3.7038]
   }, [initialLat, initialLon])
 
   useEffect(() => {
     if (typeof window === "undefined") return
     type IconDefaultPrototype = { _getIconUrl?: () => string }
-    const iconDefaultPrototype = L.Icon.Default
-      .prototype as IconDefaultPrototype
+    const iconDefaultPrototype = L.Icon.Default.prototype as IconDefaultPrototype
     delete iconDefaultPrototype._getIconUrl
     L.Icon.Default.mergeOptions({
       iconRetinaUrl:
@@ -132,19 +162,6 @@ export default function MapInner({
         "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
     })
   }, [])
-
-  useEffect(() => {
-    if (activePoi && poiMarkerRef.current) {
-      poiMarkerRef.current.openPopup()
-    }
-  }, [activePoi])
-
-  function handleRadiusChange(nextRadius: number) {
-    setRadiusMeters(nextRadius)
-    if (position) {
-      analyzePlace(position[0], position[1], nextRadius)
-    }
-  }
 
   const analyzePlace = useCallback(
     async (lat: number, lon: number, radius: number) => {
@@ -156,7 +173,6 @@ export default function MapInner({
 
       setStatus("loading")
       setErrorMessage(null)
-      setActivePoi(null)
       setPanelData((prev) => ({
         ...prev,
         placeName: null,
@@ -169,7 +185,12 @@ export default function MapInner({
         status: null,
         overpassOk: null,
         overpassError: null,
+        floodOk: null,
+        floodError: null,
+        floodStatus: null,
       }))
+
+      toast("Analizando entorno...")
 
       try {
         const res = await fetch("/api/analyze-place", {
@@ -196,36 +217,44 @@ export default function MapInner({
         }
 
         const responseStatus = data.status ?? "OK"
-        const isOverpassDown = responseStatus === "OVERPASS_DOWN"
         const warnings =
           Array.isArray(data.warnings) && data.warnings.length > 0
             ? data.warnings
             : data.warning
               ? [data.warning]
               : []
-        if (warnings.length > 0) {
-          console.debug("Avisos de analisis", warnings)
-        }
-        const nextData: SidePanelData = {
+
+        const floodOk =
+          typeof data.flood_ok === "boolean"
+            ? data.flood_ok
+            : data.contextData?.flood_risk?.ok ?? null
+        const floodError =
+          typeof data.flood_error === "string"
+            ? data.flood_error
+            : data.contextData?.flood_risk?.ok
+              ? null
+              : data.contextData?.flood_risk?.details ?? null
+        const floodStatus =
+          data.flood_status ??
+          (floodOk === null ? null : floodOk ? "OK" : "DOWN")
+
+        const nextData: PanelData = {
           placeName: data.placeName ?? null,
           report: data.aiReport ?? data.fallbackReport ?? null,
           aiReport: data.aiReport ?? null,
           context: data.contextData ?? null,
           warning: warnings.length > 0 ? warnings.join(" | ") : null,
-          coords:
-            isOverpassDown && data.contextData
-              ? {
-                  lat: data.contextData.center.lat,
-                  lon: data.contextData.center.lon,
-                }
-              : { lat, lon },
+          coords: { lat, lon },
           requestId: responseId,
           status: responseStatus,
           overpassOk: data.overpass_ok ?? null,
           overpassError: data.overpass_error ?? null,
+          floodOk,
+          floodError,
+          floodStatus,
         }
 
-        if (isOverpassDown) {
+        if (responseStatus === "OVERPASS_DOWN") {
           const fallback = lastGoodRef.current
           const fallbackCoords = fallback?.coords ?? nextData.coords
           setPanelData({
@@ -238,30 +267,33 @@ export default function MapInner({
           })
         } else {
           setPanelData(nextData)
-          if (
-            (responseStatus === "OK" || responseStatus === "NO_POIS") &&
-            nextData.report
-          ) {
+          if (nextData.report) {
             lastGoodRef.current = nextData
           }
         }
 
+        if (warnings.length > 0) {
+          const toastWarning = warnings.find((item) => {
+            const lower = item.toLowerCase()
+            return lower.includes("overpass") || lower.includes("ia")
+          })
+          if (toastWarning) {
+            toast.warning(toastWarning)
+          }
+        }
+        if (!data.aiReport && data.fallbackReport) {
+          toast("IA no disponible. Mostrando informe alternativo.")
+        }
+
         setStatus("ready")
-      } catch (err: unknown) {
+      } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return
         if (requestId !== requestIdRef.current) return
-        console.debug("Fallo al analizar lugar", err)
-        const message =
-          err instanceof Error ? err.message : "No se pudo analizar el lugar."
-        setErrorMessage(
-          message.includes("Groq") || message.includes("json")
-            ? "No se pudo generar el informe en este momento."
-            : "No se pudo analizar el lugar."
-        )
+        setErrorMessage("No se pudo analizar el lugar.")
         setStatus("error")
       }
     },
-    []
+    [toast]
   )
 
   useEffect(() => {
@@ -283,34 +315,72 @@ export default function MapInner({
     mapRef.current?.setView([initialLat, initialLon], 14, { animate: false })
   }, [initialLat, initialLon, initialRadius, radiusMeters, analyzePlace])
 
-  async function handleCopyCoords() {
-    if (!position) return
-    const text = `${position[0].toFixed(5)}, ${position[1].toFixed(5)}`
+  async function handleSearch() {
+    if (!searchValue.trim()) return
+    setSearchLoading(true)
+    toast("Buscando direccion...")
+
     try {
-      await navigator.clipboard.writeText(text)
-      setCopyNotice("Coordenadas copiadas")
-    } catch (error) {
-      console.debug("No se pudieron copiar las coordenadas", error)
-      setCopyNotice("No se pudo copiar")
+      const res = await fetch("/api/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direccion: searchValue }),
+      })
+
+      if (!res.ok) {
+        throw new Error("No se pudo geocodificar")
+      }
+
+      const data = (await res.json()) as {
+        ok: boolean
+        result?: { lat: number; lon: number; display_name: string }
+      }
+
+      if (!data.ok || !data.result) {
+        throw new Error("Sin resultados")
+      }
+
+      const { lat, lon, display_name } = data.result
+      setPosition([lat, lon])
+      mapRef.current?.flyTo([lat, lon], 14, { animate: true })
+      analyzePlace(lat, lon, radiusMeters)
+      toast.success(`Resultado: ${display_name}`)
+    } catch (err) {
+      toast.error("No se encontro la direccion")
     } finally {
-      window.setTimeout(() => setCopyNotice(null), 1500)
+      setSearchLoading(false)
+    }
+  }
+
+  function handleRadiusChange(nextRadius: number) {
+    setRadiusMeters(nextRadius)
+    if (position) {
+      analyzePlace(position[0], position[1], nextRadius)
     }
   }
 
   function handleCenter() {
     const target =
       position ??
-      (panelData.coords
-        ? [panelData.coords.lat, panelData.coords.lon]
-        : null)
+      (panelData.coords ? [panelData.coords.lat, panelData.coords.lon] : null)
     if (!target || !mapRef.current) return
     mapRef.current.flyTo(target, mapRef.current.getZoom(), { animate: true })
+  }
+
+  async function handleCopyCoords() {
+    if (!position) return
+    const text = `${position[0].toFixed(5)}, ${position[1].toFixed(5)}`
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success("Coordenadas copiadas")
+    } catch (error) {
+      toast.error("No se pudo copiar")
+    }
   }
 
   function handleClear() {
     abortRef.current?.abort()
     setPosition(null)
-    setActivePoi(null)
     setStatus("idle")
     setErrorMessage(null)
     setPanelData({
@@ -322,20 +392,34 @@ export default function MapInner({
       coords: null,
       requestId: null,
       status: null,
-      overpassOk: null,
-      overpassError: null,
-    })
+    overpassOk: null,
+    overpassError: null,
+    floodOk: null,
+    floodError: null,
+    floodStatus: null,
+  })
   }
 
-  function handleRetry() {
-    const target =
-      position ??
-      (panelData.coords
-        ? [panelData.coords.lat, panelData.coords.lon]
-        : null)
-    if (!target) return
-    setPosition([target[0], target[1]])
-    analyzePlace(target[0], target[1], radiusMeters)
+  function handleToggleLayer(layer: LayerKey, next: boolean) {
+    setLayers((prev) => {
+      if (layer === "clc" || layer === "flood") {
+        return { ...prev, [layer]: next }
+      }
+
+      const nextState = {
+        ...prev,
+        osm: false,
+        ign: false,
+        pnoa: false,
+        [layer]: next,
+      }
+
+      if (!nextState.osm && !nextState.ign && !nextState.pnoa) {
+        nextState.osm = true
+      }
+
+      return nextState
+    })
   }
 
   const overpassBadge = useMemo(() => {
@@ -345,10 +429,10 @@ export default function MapInner({
     if (panelData.overpassOk) {
       return { label: "Overpass OK", tone: "ok" as const }
     }
-    return { label: "Overpass down", tone: "error" as const }
+    return { label: "Overpass no disponible", tone: "error" as const }
   }, [panelData.overpassOk])
 
-  const groqBadge = useMemo(() => {
+  const aiBadge = useMemo(() => {
     if (status === "idle") {
       return { label: "IA en espera", tone: "muted" as const }
     }
@@ -356,7 +440,7 @@ export default function MapInner({
       return { label: "IA OK", tone: "ok" as const }
     }
     if (panelData.report) {
-      return { label: "IA fallback", tone: "warn" as const }
+      return { label: "IA alternativa", tone: "warn" as const }
     }
     return { label: "IA sin datos", tone: "error" as const }
   }, [panelData.aiReport, panelData.report, status])
@@ -371,57 +455,47 @@ export default function MapInner({
     )
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden bg-[#f8f7f3]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_60%_at_10%_0%,rgba(16,185,129,0.18),transparent_60%),radial-gradient(50%_50%_at_90%_0%,rgba(251,191,36,0.2),transparent_55%)]" />
-      <header className="sticky top-0 z-30 border-b bg-white/80 backdrop-blur">
+    <div className="flex min-h-screen flex-col bg-[#f4f3ef]">
+      <header className="border-b bg-white/85 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-[1400px] items-center gap-4 px-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white shadow-sm">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white">
               IA
             </div>
-          <div>
-            <div className="text-sm font-semibold tracking-tight">
-              IA Maps
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Analisis territorial y entorno inmediato
+            <div>
+              <div className="text-sm font-semibold tracking-tight">IA Maps</div>
+              <div className="text-xs text-muted-foreground">
+                Analisis geoespacial con fuentes oficiales
+              </div>
             </div>
           </div>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2">
             <Badge className={badgeToneClass(overpassBadge.tone)}>
               {overpassBadge.label}
             </Badge>
-            <Badge className={badgeToneClass(groqBadge.tone)}>
-              {groqBadge.label}
-            </Badge>
-            <Button variant="outline" size="sm" asChild>
-              <a
-                href="https://github.com"
-                rel="noopener noreferrer"
-                target="_blank"
-              >
-                <Github className="size-4" />
-                GitHub
-              </a>
-            </Button>
+            <Badge className={badgeToneClass(aiBadge.tone)}>{aiBadge.label}</Badge>
           </div>
         </div>
       </header>
 
-      <main className="relative mx-auto flex min-h-0 w-full max-w-[1400px] flex-1 flex-col gap-4 px-4 py-4">
-        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:items-stretch">
-          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <CardHeader className="border-b pb-4">
-              <CardTitle className="text-base">Mapa interactivo</CardTitle>
-              <CardDescription>
-                Haz click en el mapa para analizar el entorno y recibir un
-                informe completo.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
+      <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-4 px-4 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+              <div className="mb-3 text-sm font-semibold text-slate-900">
+                Buscar direccion
+              </div>
+              <SearchBar
+                value={searchValue}
+                onChange={setSearchValue}
+                onSearch={handleSearch}
+                loading={searchLoading}
+              />
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col gap-3 rounded-2xl border bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-muted-foreground">
+                <span className="text-xs font-semibold text-muted-foreground">
                   Radio
                 </span>
                 <ToggleGroup
@@ -443,48 +517,63 @@ export default function MapInner({
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
-                <Separator orientation="vertical" className="mx-1 h-6" />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopyCoords}
-                  disabled={!position}
-                >
-                  <Copy className="size-4" />
-                  Copiar coords
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCenter}
-                  disabled={!position}
-                >
-                  <LocateFixed className="size-4" />
-                  Recentrar
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleClear}
-                  disabled={!position && status === "idle"}
-                >
-                  <Eraser className="size-4" />
-                  Limpiar
-                </Button>
-                {status === "loading" && (
-                  <Badge className="border-blue-200 bg-blue-50 text-blue-700">
-                    <Loader2 className="size-3 animate-spin" />
-                    Analizando...
-                  </Badge>
-                )}
-                {copyNotice && (
-                  <span className="text-xs text-muted-foreground">
-                    {copyNotice}
-                  </span>
-                )}
+
+                <div className="ml-auto flex items-center gap-2">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCopyCoords}
+                        disabled={!position}
+                      >
+                        <Copy className="size-4" />
+                        Copiar coords
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Copiar coordenadas</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCenter}
+                        disabled={!position}
+                      >
+                        <LocateFixed className="size-4" />
+                        Recentrar
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Recentrar mapa</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClear}
+                        disabled={!position && status === "idle"}
+                      >
+                        <Eraser className="size-4" />
+                        Limpiar
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Limpiar seleccion</TooltipContent>
+                  </Tooltip>
+
+                  {status === "loading" && (
+                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">
+                      <Loader2 className="size-3 animate-spin" />
+                      Analizando...
+                    </Badge>
+                  )}
+                </div>
               </div>
 
-              <div className="relative flex-1 min-h-[200px] w-full overflow-hidden rounded-xl border bg-muted/30">
+              <div className="relative min-h-[240px] flex-1 overflow-hidden rounded-xl border bg-muted/20">
                 <MapContainer
                   center={initialCenter}
                   zoom={12}
@@ -492,14 +581,52 @@ export default function MapInner({
                     "h-full w-full",
                     status === "loading" ? "cursor-wait" : "cursor-crosshair"
                   )}
-                  whenCreated={(mapInstance) => {
-                    mapRef.current = mapInstance
-                  }}
+                  ref={mapRef}
                 >
-                  <TileLayer
-                    attribution="(c) OpenStreetMap contributors"
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  />
+                  {layers.osm && (
+                    <TileLayer
+                      attribution="(c) OpenStreetMap contributors"
+                      url={OSM_TILE_URL}
+                    />
+                  )}
+
+                  {layers.ign && (
+                    <WMSTileLayer
+                      url={IGN_WMS_URL}
+                      layers={IGN_WMS_LAYER}
+                      format="image/png"
+                      transparent={false}
+                    />
+                  )}
+
+                  {layers.pnoa && (
+                    <WMSTileLayer
+                      url={PNOA_WMS_URL}
+                      layers={PNOA_WMS_LAYER}
+                      format="image/jpeg"
+                      transparent={false}
+                    />
+                  )}
+
+                  {layers.clc && (
+                    <WMSTileLayer
+                      url={CLC_WMS_URL}
+                      layers={CLC_WMS_LAYER}
+                      format="image/png"
+                      transparent
+                      opacity={0.6}
+                    />
+                  )}
+
+                  {layers.flood && (
+                    <WMSTileLayer
+                      url={FLOOD_WMS_URL}
+                      layers={FLOOD_WMS_LAYER}
+                      format="image/png"
+                      transparent
+                      opacity={0.55}
+                    />
+                  )}
 
                   <ClickHandler
                     onClick={(nextLat, nextLon) => {
@@ -523,51 +650,14 @@ export default function MapInner({
                         }}
                       />
                       <Marker position={position}>
-                        <Popup>
-                          <div className="space-y-1 text-xs">
-                            <div className="font-semibold">Punto analizado</div>
-                            <div>
-                              Lat: {position[0].toFixed(5)} | Lon:{" "}
-                              {position[1].toFixed(5)}
-                            </div>
-                            <div>Radio: {radiusMeters} m</div>
-                          </div>
-                        </Popup>
-                        <Tooltip direction="top" offset={[0, -10]} permanent>
-                          <div className="text-xs font-medium">Punto base</div>
-                        </Tooltip>
+                        <LeafletTooltip direction="top" offset={[0, -10]}>
+                          Punto analizado
+                        </LeafletTooltip>
                       </Marker>
                     </>
                   )}
-
-                  {activePoi && (
-                    <Marker
-                      position={[activePoi.lat, activePoi.lon]}
-                      ref={(marker) => {
-                        poiMarkerRef.current = marker
-                      }}
-                    >
-                      <Popup>
-                        <div className="space-y-1 text-xs">
-                          <div className="font-semibold">{activePoi.name}</div>
-                          {activePoi.type && (
-                            <div className="text-muted-foreground">
-                              Tipo: {activePoi.type}
-                            </div>
-                          )}
-                          {typeof activePoi.distance_m === "number" && (
-                            <div>Distancia: {activePoi.distance_m} m</div>
-                          )}
-                        </div>
-                      </Popup>
-                    </Marker>
-                  )}
                 </MapContainer>
-                {status === "loading" && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/65 text-sm font-medium text-slate-700">
-                    Analizando entorno...
-                  </div>
-                )}
+
                 {!position && status === "idle" && (
                   <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                     <div className="rounded-full border bg-white/80 px-3 py-1 text-xs text-muted-foreground shadow-sm">
@@ -577,25 +667,35 @@ export default function MapInner({
                   </div>
                 )}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          <div className="flex min-h-0 flex-1 flex-col lg:w-[420px] lg:flex-none">
-            <SidePanel
+          <div className="flex min-h-0 flex-1 lg:sticky lg:top-4 lg:h-[calc(100vh-96px)] lg:w-[420px] lg:flex-none lg:self-start lg:overflow-hidden">
+            <RightPanel
               status={status}
-              data={panelData}
+              report={panelData.report}
+              aiReport={panelData.aiReport}
+              context={panelData.context}
+              placeName={panelData.placeName}
+              coords={panelData.coords}
+              radius={panelData.context?.radius_m ?? radiusMeters}
+              warning={panelData.warning}
+              statusCode={panelData.status}
               errorMessage={errorMessage}
-              selectedRadius={radiusMeters}
-              onRetry={handleRetry}
-              onClearSelection={handleClear}
-              onCenter={handleCenter}
-              onViewPoi={(poi) => {
-                if (!mapRef.current) return
-                setActivePoi(poi)
-                mapRef.current.flyTo([poi.lat, poi.lon], 16, { animate: true })
-              }}
-              onRadiusSuggestion={(suggested) => {
-                handleRadiusChange(suggested)
+              requestId={panelData.requestId}
+              floodOk={panelData.floodOk}
+              floodError={panelData.floodError}
+              floodStatus={panelData.floodStatus}
+              layers={layers}
+              onToggleLayer={handleToggleLayer}
+              onRetry={() => {
+                const target =
+                  position ??
+                  (panelData.coords
+                    ? [panelData.coords.lat, panelData.coords.lon]
+                    : null)
+                if (!target) return
+                analyzePlace(target[0], target[1], radiusMeters)
               }}
             />
           </div>
