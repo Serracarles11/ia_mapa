@@ -14,10 +14,8 @@ import data from "../app/dashboard/data.json"
 
 export default function Page() {
   return (
-    <main className="h-screen p-4">
-      <div className="h-full rounded-lg overflow-hidden border">
-        <Map />
-      </div>
+    <main className="min-h-screen">
+      <Map />
     </main>
   )
 }

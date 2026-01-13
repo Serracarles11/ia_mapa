@@ -1,6 +1,7 @@
 import "server-only"
 
 import { fetchWmsFeatureInfo } from "@/lib/geo/wms"
+import { getEfasLayerConfig } from "@/lib/copernicus"
 import { type FloodRiskInfo } from "@/lib/types"
 
 const DEFAULT_FLOOD_WMS =
@@ -12,6 +13,43 @@ export async function riesgoInundacion(
   lat: number,
   lon: number
 ): Promise<FloodRiskInfo> {
+  const efasConfig = getEfasLayerConfig()
+  const efasLayers = parseLayers(
+    process.env.COPERNICUS_EFAS_WMS_LAYERS ||
+      process.env.COPERNICUS_EFAS_WMS_LAYER ||
+      efasConfig.layer
+  )
+
+  const efasResult = await queryWmsLayers({
+    baseUrl: efasConfig.baseUrl,
+    layers: efasLayers,
+    lat,
+    lon,
+  })
+
+  if (efasResult.ok) {
+    if (efasResult.hits.length === 0) {
+      return {
+        ok: true,
+        source: "Copernicus",
+        risk_level: "desconocido",
+        details:
+          "Capa EFAS disponible. No se detecta interseccion en el punto; revisar la capa visual.",
+        layers_hit: [],
+        raw: efasResult.raw,
+      }
+    }
+
+    return {
+      ok: true,
+      source: "Copernicus",
+      risk_level: "desconocido",
+      details: efasResult.details,
+      layers_hit: efasResult.hits.map((item) => item.layer),
+      raw: efasResult.raw,
+    }
+  }
+
   const baseUrl = process.env.FLOOD_WMS_URL || DEFAULT_FLOOD_WMS
   const layers = parseLayers(
     process.env.FLOOD_WMS_LAYERS || process.env.FLOOD_WMS_LAYER
@@ -22,23 +60,16 @@ export async function riesgoInundacion(
   const rawResponses: Array<{ layer: string; raw: unknown }> = []
 
   for (const layer of layers) {
-    let result: Awaited<ReturnType<typeof fetchWmsFeatureInfo>> | null = null
-    try {
-      result = await fetchWmsFeatureInfo({
-        baseUrl,
-        layers: layer,
-        lat,
-        lon,
-        infoFormat: "application/json",
-        bufferDeg: 0.0015,
-      })
-    } catch {
-      result = null
-    }
+    const result = await safeFetchFeatureInfo({
+      baseUrl,
+      layers: layer,
+      lat,
+      lon,
+      infoFormat: "application/json",
+      bufferDeg: 0.0015,
+    })
 
-    if (!result || !result.ok) {
-      continue
-    }
+    if (!result || !result.ok) continue
 
     ok = true
 
@@ -52,6 +83,18 @@ export async function riesgoInundacion(
   }
 
   if (!ok) {
+    const efasAvailable = await checkWmsAvailability(efasConfig.baseUrl)
+    if (efasAvailable) {
+      return {
+        ok: true,
+        source: "Copernicus",
+        risk_level: "desconocido",
+        details:
+          "Capa EFAS disponible para visualizacion. Muestreo no disponible.",
+        layers_hit: [],
+      }
+    }
+
     return {
       ok: false,
       source: "MITECO",
@@ -95,6 +138,69 @@ export async function riesgoInundacion(
   return response
 }
 
+async function queryWmsLayers(params: {
+  baseUrl: string
+  layers: string[]
+  lat: number
+  lon: number
+}) {
+  let ok = false
+  const hits: Array<{ layer: string; detail: string | null }> = []
+  const rawResponses: Array<{ layer: string; raw: unknown }> = []
+
+  for (const layer of params.layers) {
+    const result = await safeFetchFeatureInfo({
+      baseUrl: params.baseUrl,
+      layers: layer,
+      lat: params.lat,
+      lon: params.lon,
+      infoFormat: "application/json",
+      bufferDeg: 0.006,
+    })
+
+    if (!result || !result.ok) continue
+    ok = true
+
+    const parsed = parseFeatureInfo(result)
+    if (parsed.raw) {
+      rawResponses.push({ layer, raw: parsed.raw })
+    }
+    if (parsed.hit) {
+      hits.push({ layer, detail: parsed.detail })
+    }
+  }
+
+  const details = hits
+    .map((item) =>
+      item.detail
+        ? `Interseccion con ${item.layer}: ${item.detail}`
+        : `Interseccion con ${item.layer}`
+    )
+    .join(" | ")
+
+  return {
+    ok,
+    hits,
+    details,
+    raw: rawResponses.length > 0 ? rawResponses : undefined,
+  }
+}
+
+async function safeFetchFeatureInfo(params: {
+  baseUrl: string
+  layers: string
+  lat: number
+  lon: number
+  infoFormat?: string
+  bufferDeg?: number
+}) {
+  try {
+    return await fetchWmsFeatureInfo(params)
+  } catch {
+    return null
+  }
+}
+
 function parseLayers(input?: string | null) {
   if (!input) return DEFAULT_LAYERS
   const items = input
@@ -125,7 +231,10 @@ function parseFeatureInfo(result: {
 
   const text = result.text ? result.text.trim() : ""
   const lower = text.toLowerCase()
-  const hit = Boolean(text) && !lower.includes("no features") && !lower.includes("sin resultados")
+  const hit =
+    Boolean(text) &&
+    !lower.includes("no features") &&
+    !lower.includes("sin resultados")
   return {
     hit,
     detail: hit ? truncate(text, 240) : null,
@@ -163,4 +272,18 @@ function layerRiskScore(layer: string) {
   if (normalized.includes("100")) return 2
   if (normalized.includes("500")) return 1
   return 1
+}
+
+async function checkWmsAvailability(baseUrl: string) {
+  try {
+    const url = new URL(baseUrl)
+    url.searchParams.set("service", "WMS")
+    url.searchParams.set("request", "GetCapabilities")
+    const response = await fetch(url.toString(), { cache: "no-store" })
+    if (!response.ok) return false
+    const text = await response.text()
+    return /WMS_Capabilities|WMT_MS_Capabilities/i.test(text)
+  } catch {
+    return false
+  }
 }

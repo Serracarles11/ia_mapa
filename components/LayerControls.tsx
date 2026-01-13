@@ -14,6 +14,7 @@ export type LayerState = {
   pnoa: boolean
   clc: boolean
   flood: boolean
+  air: boolean
 }
 
 export type LayerKey = keyof LayerState
@@ -24,6 +25,9 @@ type LayerControlsProps = {
   floodDisabled?: boolean
   floodHint?: string
   floodStatus?: "OK" | "DOWN" | null
+  airDisabled?: boolean
+  airHint?: string
+  airStatus?: "OK" | "DOWN" | "VISUAL_ONLY" | null
 }
 
 type SwitchRowProps = {
@@ -86,11 +90,20 @@ export default function LayerControls({
   floodDisabled,
   floodHint,
   floodStatus,
+  airDisabled,
+  airHint,
+  airStatus,
 }: LayerControlsProps) {
   const floodDescription =
     floodStatus === "DOWN"
-      ? "Servicio de inundacion no disponible"
+      ? "Capa inundacion no disponible (fuente caida)"
       : "Zonas inundables oficiales (WMS)"
+  const airDescription =
+    airStatus === "DOWN"
+      ? "Servicio CAMS no disponible"
+      : airStatus === "VISUAL_ONLY"
+        ? "Capa CAMS solo visual"
+        : "Capa CAMS (calidad del aire)"
 
   return (
     <div className="space-y-3">
@@ -125,6 +138,14 @@ export default function LayerControls({
         onChange={(value) => onToggle("flood", value)}
         disabled={floodDisabled}
         tooltip={floodHint}
+      />
+      <SwitchRow
+        label="Contaminacion / aire"
+        description={airDescription}
+        checked={layers.air}
+        onChange={(value) => onToggle("air", value)}
+        disabled={airDisabled}
+        tooltip={airHint}
       />
     </div>
   )

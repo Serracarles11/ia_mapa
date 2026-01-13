@@ -45,48 +45,33 @@ export async function POST(req: Request) {
     pois: normalizePois(body.pois),
   }
 
-  const prompt = buildPrompt(safeInput)
-
-  const response = await fetch(apiUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: 1400,
-      temperature: 0,
-      response_format: { type: "json_object" },
-    }),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    return NextResponse.json(
-      { report: buildFallbackReport(`Groq request failed: ${errorText}`) },
-      { status: 200 }
-    )
+  const primaryPrompt = buildPrompt(safeInput, "primary")
+  const primary = await callGroq(apiUrl, apiKey, model, systemPrompt, primaryPrompt, 1400)
+  if (primary.ok) {
+    const report = safeJsonParse(primary.text)
+    if (report) {
+      return NextResponse.json({ report })
+    }
   }
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>
+  const reducedInput = {
+    ...safeInput,
+    pois: trimPois(safeInput.pois, 6),
   }
-  const text = data?.choices?.[0]?.message?.content || ""
-
-  const report = safeJsonParse(text)
-  if (!report) {
-    return NextResponse.json(
-      { report: buildFallbackReport("Invalid JSON from model") },
-      { status: 200 }
-    )
+  const fallbackPrompt = buildPrompt(reducedInput, "minimal")
+  const fallback = await callGroq(apiUrl, apiKey, model, systemPrompt, fallbackPrompt, 800)
+  if (fallback.ok) {
+    const report = safeJsonParse(fallback.text)
+    if (report) {
+      return NextResponse.json({ report })
+    }
   }
 
-  return NextResponse.json({ report })
+  const errorText = primary.error || fallback.error || "Groq no disponible"
+  return NextResponse.json(
+    { report: buildFallbackReport(errorText) },
+    { status: 200 }
+  )
 }
 
 type PromptInput = {
@@ -113,9 +98,9 @@ type PromptPois = {
 }
 
 const systemPrompt =
-  "Eres un analista territorial y urbano experto. Usa EXCLUSIVAMENTE el JSON de contexto. Prohibido usar conocimiento externo o lugares fuera del radio. No inventes nombres ni atributos. Usa [] si una categoria no tiene datos. limited_info.is_limited solo puede ser true si TODAS las categorias de POIs estan vacias. Devuelve SOLO un JSON VALIDO (sin texto adicional ni bloque de codigo). Usa comillas dobles, sin comas finales y sin comentarios."
+  "Eres un analista territorial. Responde SOLO con JSON valido. No inventes datos ni uses fuentes externas. Usa [] si una categoria no tiene datos. limited_info.is_limited solo es true si TODAS las categorias estan vacias."
 
-function buildPrompt(input: PromptInput) {
+function buildPrompt(input: PromptInput, mode: "primary" | "minimal") {
   const orderedContext = {
     center: { lat: input.lat, lon: input.lon },
     radius_m: input.radius_m,
@@ -144,6 +129,9 @@ function buildPrompt(input: PromptInput) {
     "- Si una categoria no tiene datos, usa [].",
     "- No inventes nombres ni atributos.",
     "- limited_info.is_limited solo es true si TODAS las categorias estan vacias.",
+    mode === "minimal"
+      ? "- Si hay dudas, devuelve arrays vacios y limited_info.is_limited true."
+      : "",
   ].join("\n")
 }
 
@@ -160,6 +148,54 @@ function safeJsonParse(text: string) {
     } catch {
       return null
     }
+  }
+}
+
+async function callGroq(
+  apiUrl: string,
+  apiKey: string,
+  model: string,
+  system: string,
+  user: string,
+  maxTokens: number
+) {
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      return { ok: false, error: errorText }
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    const text = data?.choices?.[0]?.message?.content || ""
+    if (!text.trim()) {
+      return { ok: false, error: "Empty content" }
+    }
+    if (/json_validate_failed|failed_generation/i.test(text)) {
+      return { ok: false, error: "Model JSON validation failed" }
+    }
+    return { ok: true, text }
+  } catch (error) {
+    return { ok: false, error: String(error) }
   }
 }
 
@@ -203,6 +239,24 @@ function normalizePois(input: PromptInput["pois"] | undefined): PromptPois {
     tourism: pick(input.tourism),
     museums: pick(input.museums),
     viewpoints: pick(input.viewpoints),
+  }
+}
+
+function trimPois(pois: PromptPois, limit: number): PromptPois {
+  const pick = <T>(items: T[]) => items.slice(0, limit)
+  return {
+    restaurants: pick(pois.restaurants),
+    bars_and_clubs: pick(pois.bars_and_clubs),
+    cafes: pick(pois.cafes),
+    pharmacies: pick(pois.pharmacies),
+    hospitals: pick(pois.hospitals),
+    schools: pick(pois.schools),
+    supermarkets: pick(pois.supermarkets),
+    transport: pick(pois.transport),
+    hotels: pick(pois.hotels),
+    tourism: pick(pois.tourism),
+    museums: pick(pois.museums),
+    viewpoints: pick(pois.viewpoints),
   }
 }
 

@@ -32,6 +32,8 @@ type SourcesUsed = {
   flood_risk: boolean
   flood_ok: boolean
   land_cover: boolean
+  air_quality: boolean
+  air_ok: boolean
 }
 
 const quickSuggestions = [
@@ -126,9 +128,13 @@ export default function ChatView({
         sources_used?: SourcesUsed
       }
       const answerText =
-        typeof data.answer === "string" && data.answer.trim().length > 0
-          ? data.answer.trim()
-          : "La IA no pudo generar una respuesta util."
+        typeof data.answer === "string" ? data.answer.trim() : ""
+
+      if (!answerText) {
+        setStatus("idle")
+        setInput("")
+        return
+      }
 
       const assistantMessage: ChatMessage = {
         id: `${messageId}-assistant`,
@@ -149,8 +155,8 @@ export default function ChatView({
       setInput("")
       setStatus("idle")
     } catch (err) {
-      setStatus("error")
-      setError("La IA no pudo responder en este momento.")
+      setStatus("idle")
+      setError(null)
     }
   }
 
@@ -238,6 +244,14 @@ export default function ChatView({
                     <div>
                       Uso del suelo:{" "}
                       {message.sourcesUsed.land_cover ? "CLC disponible" : "sin datos"}
+                    </div>
+                    <div>
+                      Aire:{" "}
+                      {message.sourcesUsed.air_ok
+                        ? "CAMS ok"
+                        : message.sourcesUsed.air_quality
+                          ? "CAMS visual"
+                          : "sin datos"}
                     </div>
                   </div>
                 )}
@@ -334,6 +348,8 @@ function isSourcesUsed(value: unknown): value is SourcesUsed {
   if (typeof record.flood_risk !== "boolean") return false
   if (typeof record.flood_ok !== "boolean") return false
   if (typeof record.land_cover !== "boolean") return false
+  if (typeof record.air_quality !== "boolean") return false
+  if (typeof record.air_ok !== "boolean") return false
   if (!record.categories || typeof record.categories !== "object") return false
   return true
 }

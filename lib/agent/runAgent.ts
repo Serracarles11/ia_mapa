@@ -3,18 +3,27 @@ import "server-only"
 import { callLlm, safeJsonParse, type LlmMessage, type LlmTool } from "@/lib/llm"
 import { buscarCoordenadas } from "@/lib/tools/buscarCoordenadas"
 import { capasUrbanismo, type CapasUrbanismoResult } from "@/lib/tools/capasUrbanismo"
+import { aireContaminacion } from "@/lib/tools/aireContaminacion"
 import { riesgoInundacion } from "@/lib/tools/riesgoInundacion"
-import { type AiReport, type ContextData, type FloodRiskInfo, type LandCoverInfo } from "@/lib/types"
+import {
+  type AiReport,
+  type AirQualityInfo,
+  type ContextData,
+  type FloodRiskInfo,
+  type LandCoverInfo,
+} from "@/lib/types"
 
 type ToolCache = {
   capasUrbanismo?: CapasUrbanismoResult | null
   riesgoInundacion?: FloodRiskInfo | null
+  aireContaminacion?: AirQualityInfo | null
 }
 
 type AgentResult = {
   report: AiReport | null
   landCover: LandCoverInfo | null
   floodRisk: FloodRiskInfo | null
+  airQuality: AirQualityInfo | null
   warnings: string[]
 }
 
@@ -39,18 +48,19 @@ export async function runAgent(
 
   let landCover: LandCoverInfo | null = baseContext.land_cover
   let floodRisk: FloodRiskInfo | null = baseContext.flood_risk
+  let airQuality: AirQualityInfo | null = baseContext.air_quality
 
   for (let step = 0; step < 4; step += 1) {
     const response = await callLlm({
       messages,
       tools,
-      temperature: 0.2,
+      temperature: 0.3,
       responseFormat: "json_object",
     })
 
     if (!response) {
       warnings.push("IA no disponible")
-      return { report: null, landCover, floodRisk, warnings }
+      return { report: null, landCover, floodRisk, airQuality, warnings }
     }
 
     const toolCalls = response.message.tool_calls
@@ -71,6 +81,10 @@ export async function runAgent(
           const result = toolResult as FloodRiskInfo | null
           floodRisk = result
         }
+        if (call.name === "aireContaminacion") {
+          const result = toolResult as AirQualityInfo | null
+          airQuality = result
+        }
 
         messages.push({
           role: "tool",
@@ -83,18 +97,33 @@ export async function runAgent(
     }
 
     const content = response.message.content ?? ""
+    if (!content.trim()) {
+      warnings.push("Respuesta IA vacia")
+      messages.push({
+        role: "user",
+        content:
+          "Tu respuesta estaba vacia. Devuelve SOLO el JSON del esquema, sin texto adicional.",
+      })
+      continue
+    }
+
     const parsed = safeJsonParse(content)
     const report = parsed ? normalizeReport(parsed) : null
     if (!report) {
       warnings.push("Respuesta IA invalida")
-      return { report: null, landCover, floodRisk, warnings }
+      messages.push({
+        role: "user",
+        content:
+          "Tu respuesta no cumple el esquema. Devuelve SOLO el JSON valido del informe.",
+      })
+      continue
     }
 
-    return { report, landCover, floodRisk, warnings }
+    return { report, landCover, floodRisk, airQuality, warnings }
   }
 
   warnings.push("IA sin respuesta final")
-  return { report: null, landCover, floodRisk, warnings }
+  return { report: null, landCover, floodRisk, airQuality, warnings }
 }
 
 function buildTools(): LlmTool[] {
@@ -128,6 +157,19 @@ function buildTools(): LlmTool[] {
       name: "riesgoInundacion",
       description:
         "Consulta WMS oficial de zonas inundables para saber si el punto esta afectado.",
+      parameters: {
+        type: "object",
+        properties: {
+          lat: { type: "number" },
+          lon: { type: "number" },
+        },
+        required: ["lat", "lon"],
+      },
+    },
+    {
+      name: "aireContaminacion",
+      description:
+        "Consulta CAMS (Copernicus Atmosphere) para conocer contaminacion/aire en el punto.",
       parameters: {
         type: "object",
         properties: {
@@ -171,14 +213,22 @@ async function runTool(
     return cache.riesgoInundacion
   }
 
+  if (name === "aireContaminacion") {
+    if (cache.aireContaminacion === undefined) {
+      cache.aireContaminacion = await aireContaminacion(lat, lon)
+    }
+    return cache.aireContaminacion
+  }
+
   return null
 }
 
 function buildSystemPrompt() {
   return [
     "Eres un analista geoespacial. Responde SIEMPRE en castellano.",
-    "Antes de redactar el informe debes llamar SIEMPRE a las herramientas capasUrbanismo y riesgoInundacion.",
-    "Usa SOLO el contexto y las herramientas. No inventes datos.",
+    "Usa SOLO el contexto y las herramientas si necesitas mas datos. No inventes.",
+    "Redacta con opinion profesional y recomendaciones claras basadas en los datos.",
+    "Si faltan datos, indicalo en limitaciones sin frases de incapacidad.",
     "Devuelve SOLO un JSON valido con este esquema:",
     "{",
     '  "descripcion_zona": string,',

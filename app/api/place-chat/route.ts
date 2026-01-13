@@ -19,6 +19,8 @@ type SourcesUsed = {
   flood_risk: boolean
   flood_ok: boolean
   land_cover: boolean
+  air_quality: boolean
+  air_ok: boolean
 }
 
 type PlaceChatResponse = {
@@ -233,13 +235,6 @@ const SPECIFIC_TAG_RULES: TagRule[] = [
   },
 ]
 
-const REQUIRED_HEADINGS = [
-  "Recomendacion principal:",
-  "Por que:",
-  "Alternativas:",
-  "Limitaciones:",
-]
-
 const VAGUE_HINTS = ["sigue igual", "sin cambios", "no ha cambiado"]
 
 export async function POST(req: Request) {
@@ -385,7 +380,9 @@ function buildSystemPrompt(intent: IntentResult) {
     "3) Si requiere busqueda, llamar a buscarPOIsPorCategoria.",
     "4) Razonar con los datos y responder.",
     "Responde SIEMPRE en castellano y no inventes datos.",
-    "Si requiere_busqueda es true, no respondas hasta usar la herramienta.",
+    "Aporta opinion profesional y recomendaciones claras basadas en los datos.",
+    "Si faltan datos, indicalo en limitaciones sin frases de incapacidad.",
+    "Si requiere_busqueda es true y necesitas mas datos, usa la herramienta.",
     "Devuelve texto normal con estos encabezados exactos:",
     "Recomendacion principal:",
     "Por que:",
@@ -408,6 +405,7 @@ function buildUserPrompt(
   const topLines = buildTopLines(summary)
   const flood = context.flood_risk
   const landCover = context.land_cover
+  const air = context.air_quality
 
   const floodLine = flood
     ? `Riesgo inundacion: ${flood.risk_level} (${flood.details})`
@@ -415,6 +413,9 @@ function buildUserPrompt(
   const landLine = landCover
     ? `Uso del suelo CLC: ${landCover.label} (codigo ${landCover.code})`
     : "Uso del suelo CLC: sin datos"
+  const airLine = air
+    ? `Calidad del aire: ${air.details}`
+    : "Calidad del aire: sin datos"
 
   const intentLine = `Intent: ${intent.intent} | Categoria: ${intent.label} | Tags: ${intent.tags.join(", ") || "ninguno"}`
 
@@ -427,6 +428,7 @@ function buildUserPrompt(
     "",
     floodLine,
     landLine,
+    airLine,
     intentLine,
     "",
     "Contexto JSON:",
@@ -464,13 +466,10 @@ function normalizeAnswer(
 ): PlaceChatResponse {
   const content = raw.trim()
   const lower = content.toLowerCase()
-  const missingHeadings = REQUIRED_HEADINGS.some(
-    (heading) => !new RegExp(heading, "i").test(content)
-  )
   const isVague = VAGUE_HINTS.some((hint) => lower.includes(hint))
   const looksJson = content.startsWith("{")
 
-  if (missingHeadings || isVague || looksJson) {
+  if (isVague || looksJson || content.length < 20) {
     return fallback
   }
 
@@ -495,6 +494,8 @@ function buildNoContextResponse(): PlaceChatResponse {
       flood_risk: false,
       flood_ok: false,
       land_cover: false,
+      air_quality: false,
+      air_ok: false,
     },
   }
 }
@@ -938,6 +939,8 @@ function buildSourcesUsed(
   dynamicResult: BuscarPOIsPorCategoriaResult | null
 ): SourcesUsed {
   const categories = { ...summary.counts }
+  const airStatus = context.risks?.air?.status ?? "DOWN"
+  const airOk = context.air_quality?.ok ?? false
 
   if (intent.requiresTool && dynamicResult?.ok) {
     categories[intent.label] = dynamicResult.pois.length
@@ -949,6 +952,8 @@ function buildSourcesUsed(
     flood_risk: Boolean(context.flood_risk),
     flood_ok: context.flood_risk?.ok ?? false,
     land_cover: Boolean(context.land_cover),
+    air_quality: airStatus !== "DOWN",
+    air_ok: airOk && airStatus !== "VISUAL_ONLY",
   }
 }
 
@@ -966,6 +971,12 @@ function buildLimitations(
   }
   if (!context.flood_risk || !context.flood_risk.ok) {
     limits.push("Sin datos de riesgo de inundacion del WMS oficial.")
+  }
+  if (!context.air_quality || !context.air_quality.ok) {
+    limits.push("Sin datos CAMS de calidad del aire.")
+  }
+  if (context.risks?.air?.status === "VISUAL_ONLY") {
+    limits.push("Calidad del aire disponible solo como capa visual.")
   }
   if (!hasPois(context)) {
     limits.push("Sin POIs disponibles dentro del radio.")

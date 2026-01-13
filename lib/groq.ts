@@ -43,7 +43,7 @@ export type AiReportResult = {
 }
 
 export const systemPrompt =
-  "Eres un analista territorial y urbano experto. Responde SIEMPRE en castellano de Espana con lenguaje claro, natural y explicativo. Usa EXCLUSIVAMENTE el JSON de contexto (OSM). Prohibido usar conocimiento externo o mencionar lugares fuera del radio. No inventes nombres, servicios, valoraciones ni caracteristicas: solo usa los nombres y atributos presentes en las listas. Si un dato no existe, indicalo explicitamente. Ordena los POIs por distance_m ascendente. Cada POI debe incluir distance_m. Usa [] si una categoria no tiene datos. limited_info.is_limited solo puede ser true si TODAS las categorias de POIs estan vacias. Devuelve SOLO un JSON VALIDO (sin texto adicional ni markdown). Usa comillas dobles, sin comas finales y sin comentarios. No incluyas claves adicionales ni ejemplos. En summary_general, evita listas simples: ofrece una respuesta razonada que ayude a decidir, comparando opciones con distancia, tipo y datos disponibles. Si preguntan por 'mejor' o 'recomendado', elige una opcion principal cuando sea posible, explica por que, compara con 1-2 alternativas cercanas y menciona limitaciones de datos si existen. Si los datos son incompletos, dilo claramente y razona solo con lo que se sabe."
+  "Eres un analista territorial. Responde SIEMPRE en castellano de Espana. Usa SOLO el JSON de contexto y no inventes datos. Devuelve SOLO un JSON valido (sin texto adicional ni markdown). Ordena los POIs por distance_m ascendente y usa [] si no hay datos. limited_info.is_limited solo puede ser true si TODAS las categorias estan vacias."
 
 const strictSystemPrompt = `${systemPrompt} Si no puedes cumplir, devuelve el JSON con arrays vacios y limited_info.is_limited true.`
 
@@ -99,9 +99,23 @@ export async function generateAiReportSafe(
     return retry.result
   }
 
+  const ultra = compactContext(contextData, 4)
+  const lastPrompt = buildUserPrompt(ultra, "minimal")
+  const lastTry = await callGroq(
+    apiUrl,
+    apiKey,
+    model,
+    strictSystemPrompt,
+    lastPrompt,
+    400
+  )
+  if (lastTry.ok) {
+    return lastTry.result
+  }
+
   return {
     report: buildFallbackReportFromContext(contextData, "Groq no disponible"),
-    warning: retry.error || primary.error || "Groq no disponible",
+    warning: lastTry.error || retry.error || primary.error || "Groq no disponible",
   }
 }
 
@@ -208,7 +222,7 @@ function buildFallbackReportFromContext(
 
 function buildUserPrompt(
   contextData: unknown,
-  mode: "primary" | "strict"
+  mode: "primary" | "strict" | "minimal"
 ) {
   const schemaDescription = [
     "place_name: string|null",
@@ -237,7 +251,7 @@ function buildUserPrompt(
     "- limited_info.is_limited solo es true si TODAS las categorias estan vacias.",
     "- Devuelve SOLO JSON valido, sin texto adicional.",
     "- No incluyas claves adicionales.",
-    mode === "strict"
+    mode === "strict" || mode === "minimal"
       ? "- Si hay dudas, devuelve arrays vacios y limited_info.is_limited true."
       : "",
   ].join("\n")
@@ -281,6 +295,10 @@ async function callGroq(
   const text = data?.choices?.[0]?.message?.content || ""
   if (!text.trim()) {
     return { ok: false, error: "Empty content from model" }
+  }
+
+  if (/json_validate_failed|failed_generation/i.test(text)) {
+    return { ok: false, error: "Model JSON validation failed" }
   }
 
   const reportJson = safeJsonParse(text)

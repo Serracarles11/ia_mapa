@@ -26,15 +26,21 @@ export type LlmRequest = {
 }
 
 export type LlmResponse = {
-  provider: "openai" | "ollama"
+  provider: "openai" | "groq" | "ollama"
   message: { content: string | null; tool_calls?: LlmToolCall[] }
 }
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+const DEFAULT_GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+const DEFAULT_GROQ_MODEL = "llama-3.3-70b"
 const DEFAULT_OLLAMA_MODEL = "llama3.1"
 
 export function hasOpenAiKey() {
   return Boolean(process.env.OPENAI_API_KEY)
+}
+
+export function hasGroqKey() {
+  return Boolean(process.env.GROQ_API_KEY)
 }
 
 export function hasOllama() {
@@ -46,7 +52,11 @@ export async function callLlm(request: LlmRequest): Promise<LlmResponse | null> 
     return callOpenAi(request)
   }
 
-  if (hasOllama() || !hasOpenAiKey()) {
+  if (hasGroqKey()) {
+    return callGroq(request)
+  }
+
+  if (hasOllama()) {
     return callOllama(request)
   }
 
@@ -111,6 +121,75 @@ async function callOpenAi(request: LlmRequest): Promise<LlmResponse | null> {
 
     return {
       provider: "openai",
+      message: {
+        content: message.content ?? null,
+        tool_calls: normalizeOpenAiToolCalls(message.tool_calls),
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+async function callGroq(request: LlmRequest): Promise<LlmResponse | null> {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) return null
+
+  const apiUrl = process.env.GROQ_API_URL || DEFAULT_GROQ_API_URL
+  const model = process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL
+  const tools = request.tools?.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }))
+
+  const body: Record<string, unknown> = {
+    model,
+    messages: request.messages.map(toOpenAiMessage),
+    temperature: request.temperature ?? 0.2,
+  }
+
+  if (typeof request.maxTokens === "number") {
+    body.max_tokens = request.maxTokens
+  }
+
+  if (request.responseFormat === "json_object") {
+    body.response_format = { type: "json_object" }
+  }
+
+  if (tools && tools.length > 0) {
+    body.tools = tools
+    body.tool_choice = "auto"
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{
+        message?: { content?: string | null; tool_calls?: OpenAiToolCall[] }
+      }>
+    }
+
+    const message = data.choices?.[0]?.message
+    if (!message) return null
+
+    return {
+      provider: "groq",
       message: {
         content: message.content ?? null,
         tool_calls: normalizeOpenAiToolCalls(message.tool_calls),

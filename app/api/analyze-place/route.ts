@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server"
 
 import { reverseGeocode } from "@/lib/osm/nominatim"
-import { fetchOverpassPois, type OverpassPoi } from "@/lib/osm/overpass"
+import {
+  fetchNearestWaterways,
+  fetchOverpassPois,
+  type OverpassPoi,
+} from "@/lib/osm/overpass"
 import { capasUrbanismo } from "@/lib/tools/capasUrbanismo"
+import { aireContaminacion } from "@/lib/tools/aireContaminacion"
 import { riesgoInundacion } from "@/lib/tools/riesgoInundacion"
 import { buildFallbackReport } from "@/lib/report/buildFallbackReport"
 import { runAgent } from "@/lib/agent/runAgent"
 import {
   type AiReport,
+  type AirQualityInfo,
   type ContextData,
   type FloodRiskInfo,
   type LandCoverInfo,
@@ -23,6 +29,7 @@ type AnalyzeRequest = {
 
 type AnalyzeStatus = "OK" | "NO_POIS" | "OVERPASS_DOWN"
 type FloodStatus = "OK" | "DOWN"
+type AirStatus = "OK" | "DOWN" | "VISUAL_ONLY"
 
 type AnalyzeResponse = {
   ok: boolean
@@ -34,6 +41,9 @@ type AnalyzeResponse = {
   flood_ok: boolean
   flood_error: string | null
   flood_status: FloodStatus
+  air_ok: boolean
+  air_error: string | null
+  air_status: AirStatus
   status: AnalyzeStatus
   aiReport: AiReport | null
   fallbackReport: AiReport | null
@@ -82,12 +92,22 @@ export async function POST(req: Request) {
 
   const warnings: string[] = []
   let placeName: string | null = null
+  let placeMeta: { category: string | null; addressLine: string | null; municipality: string | null } = {
+    category: null,
+    addressLine: null,
+    municipality: null,
+  }
   let overpassOk = false
   let overpassError: string | null = null
 
   try {
     const reverse = await reverseGeocode(lat, lon).catch(() => null)
     placeName = reverse?.display_name ?? reverse?.name ?? null
+    placeMeta = {
+      category: reverse?.category ?? null,
+      addressLine: reverse?.address_line ?? reverse?.display_name ?? null,
+      municipality: reverse?.municipality ?? null,
+    }
   } catch {
     placeName = null
   }
@@ -108,6 +128,7 @@ export async function POST(req: Request) {
   if (!overpassOk) {
     if (lastGoodContext && lastGoodReport) {
       const floodMeta = buildFloodMeta(lastGoodContext.flood_risk)
+      const airMeta = buildAirMeta(lastGoodContext.air_quality)
       const payload: AnalyzeResponse = {
         ok: true,
         request_id: requestId,
@@ -118,6 +139,9 @@ export async function POST(req: Request) {
         flood_ok: floodMeta.flood_ok,
         flood_error: floodMeta.flood_error,
         flood_status: floodMeta.flood_status,
+        air_ok: airMeta.air_ok,
+        air_error: airMeta.air_error,
+        air_status: airMeta.air_status,
         status: "OVERPASS_DOWN",
         aiReport: null,
         fallbackReport: lastGoodReport,
@@ -132,9 +156,11 @@ export async function POST(req: Request) {
       lon,
       radius,
       placeName,
+      placeMeta,
       warnings
     )
     const floodMeta = buildFloodMeta(contextData.flood_risk)
+    const airMeta = buildAirMeta(contextData.air_quality)
 
     const payload: AnalyzeResponse = {
       ok: true,
@@ -146,6 +172,9 @@ export async function POST(req: Request) {
       flood_ok: floodMeta.flood_ok,
       flood_error: floodMeta.flood_error,
       flood_status: floodMeta.flood_status,
+      air_ok: airMeta.air_ok,
+      air_error: airMeta.air_error,
+      air_status: airMeta.air_status,
       status: "OVERPASS_DOWN",
       aiReport: null,
       fallbackReport: report,
@@ -158,36 +187,71 @@ export async function POST(req: Request) {
 
   const { pois, hasPois } = buildPoisByCategory(lat, lon, radius, overpassPois)
 
-  const [urban, floodRaw] = await Promise.all([
+  const [urban, floodRaw, airRaw, waterways] = await Promise.all([
     capasUrbanismo(lat, lon).catch(() => null),
     riesgoInundacion(lat, lon).catch(() => null),
+    aireContaminacion(lat, lon).catch(() => null),
+    fetchNearestWaterways(lat, lon, Math.min(radius * 2, 4000)).catch(() => []),
   ])
 
   const landCover: LandCoverInfo | null = urban?.land_cover ?? null
   const floodRisk = ensureFloodRisk(floodRaw)
+  const airQuality = ensureAirQuality(airRaw)
+  const landuseSummary =
+    urban?.landuse_summary ?? (landCover ? `CLC: ${landCover.label}` : null)
+  const nearestWaterways = waterways ?? []
+  const isCoastal = nearestWaterways.some((item) =>
+    item.type.toLowerCase().includes("coastline")
+  )
+  const floodRiskWithProxy = applyFloodProxy(floodRisk, nearestWaterways)
 
   if (!landCover) {
     warnings.push("Sin datos Copernicus CLC 2018")
   }
-  if (!floodRisk.ok) {
+  if (!floodRiskWithProxy.ok) {
     warnings.push("Servicio de inundacion no disponible")
+  }
+  if (!airQuality.ok) {
+    warnings.push("Servicio CAMS no disponible")
   }
 
   const sources = {
     osm: { nominatim: Boolean(placeName), overpass: true },
     ign: {
       layers: ["IGNBaseTodo", "PNOA"],
-      flood_wms: floodRisk.ok,
+      flood_wms: floodRiskWithProxy.source === "MITECO",
     },
-    copernicus: { corine: Boolean(landCover) },
+    copernicus: {
+      corine: Boolean(landCover),
+      efas: floodRiskWithProxy.source === "Copernicus",
+      cams: airQuality.ok,
+    },
+  }
+
+  const poiSummary = buildPoiSummary(pois)
+  const environment = {
+    landuse_summary: landuseSummary,
+    nearest_waterways: nearestWaterways,
+    elevation_m: null,
+    is_coastal: nearestWaterways.length > 0 ? isCoastal : null,
   }
 
   let contextData: ContextData = {
     center: { lat, lon },
     radius_m: radius,
+    place: {
+      name: placeName,
+      category: placeMeta.category,
+      addressLine: placeMeta.addressLine,
+      municipality: placeMeta.municipality,
+    },
+    poi_summary: poiSummary,
     sources,
     land_cover: landCover,
-    flood_risk: floodRisk,
+    flood_risk: floodRiskWithProxy,
+    air_quality: airQuality,
+    environment,
+    risks: buildRiskSummary(floodRiskWithProxy, airQuality),
     pois,
   }
 
@@ -203,19 +267,25 @@ export async function POST(req: Request) {
     try {
       agentResult = await runAgent(contextData, placeName, {
         capasUrbanismo: urban,
-        riesgoInundacion: floodRisk,
+        riesgoInundacion: floodRiskWithProxy,
+        aireContaminacion: airQuality,
       })
     } catch (error) {
       if (process.env.NODE_ENV === "development") {
         console.error("Agent error", error)
       }
-      warnings.push("IA no disponible")
     }
 
     if (agentResult?.landCover) {
       contextData = {
         ...contextData,
         land_cover: agentResult.landCover,
+        environment: {
+          ...contextData.environment,
+          landuse_summary:
+            contextData.environment.landuse_summary ??
+            `CLC: ${agentResult.landCover.label}`,
+        },
         sources: {
           ...contextData.sources,
           copernicus: { corine: true },
@@ -226,15 +296,40 @@ export async function POST(req: Request) {
       contextData = {
         ...contextData,
         flood_risk: agentResult.floodRisk,
+        risks: buildRiskSummary(agentResult.floodRisk, contextData.air_quality),
         sources: {
           ...contextData.sources,
-          ign: { ...contextData.sources.ign, flood_wms: agentResult.floodRisk.ok },
+          ign: {
+            ...contextData.sources.ign,
+            flood_wms: agentResult.floodRisk.source === "MITECO",
+          },
+          copernicus: {
+            ...contextData.sources.copernicus,
+            efas: agentResult.floodRisk.source === "Copernicus",
+          },
+        },
+      }
+    }
+    if (agentResult?.airQuality) {
+      contextData = {
+        ...contextData,
+        air_quality: agentResult.airQuality,
+        risks: buildRiskSummary(contextData.flood_risk, agentResult.airQuality),
+        sources: {
+          ...contextData.sources,
+          copernicus: {
+            ...contextData.sources.copernicus,
+            cams: agentResult.airQuality.ok,
+          },
         },
       }
     }
 
     if (agentResult?.warnings) {
-      warnings.push(...agentResult.warnings)
+      const safeWarnings = agentResult.warnings.filter(
+        (item) => !item.toLowerCase().includes("ia")
+      )
+      warnings.push(...safeWarnings)
     }
     aiReport = agentResult?.report ?? null
 
@@ -244,6 +339,7 @@ export async function POST(req: Request) {
   }
 
   const floodMeta = buildFloodMeta(contextData.flood_risk)
+  const airMeta = buildAirMeta(contextData.air_quality)
   const payload: AnalyzeResponse = {
     ok: true,
     request_id: requestId,
@@ -254,6 +350,9 @@ export async function POST(req: Request) {
     flood_ok: floodMeta.flood_ok,
     flood_error: floodMeta.flood_error,
     flood_status: floodMeta.flood_status,
+    air_ok: airMeta.air_ok,
+    air_error: airMeta.air_error,
+    air_status: airMeta.air_status,
     status,
     aiReport,
     fallbackReport,
@@ -278,38 +377,71 @@ async function buildMinimalContextAndReport(
   lon: number,
   radius: number,
   placeName: string | null,
+  placeMeta: { category: string | null; addressLine: string | null; municipality: string | null },
   warnings: string[]
 ) {
-  const [urban, floodRaw] = await Promise.all([
+  const [urban, floodRaw, airRaw, waterways] = await Promise.all([
     capasUrbanismo(lat, lon).catch(() => null),
     riesgoInundacion(lat, lon).catch(() => null),
+    aireContaminacion(lat, lon).catch(() => null),
+    fetchNearestWaterways(lat, lon, Math.min(radius * 2, 4000)).catch(() => []),
   ])
 
   const landCover: LandCoverInfo | null = urban?.land_cover ?? null
   const floodRisk = ensureFloodRisk(floodRaw)
+  const airQuality = ensureAirQuality(airRaw)
+  const landuseSummary =
+    urban?.landuse_summary ?? (landCover ? `CLC: ${landCover.label}` : null)
+  const nearestWaterways = waterways ?? []
+  const isCoastal = nearestWaterways.some((item) =>
+    item.type.toLowerCase().includes("coastline")
+  )
+  const floodRiskWithProxy = applyFloodProxy(floodRisk, nearestWaterways)
 
   if (!landCover) {
     warnings.push("Sin datos Copernicus CLC 2018")
   }
-  if (!floodRisk.ok) {
+  if (!floodRiskWithProxy.ok) {
     warnings.push("Servicio de inundacion no disponible")
+  }
+  if (!airQuality.ok) {
+    warnings.push("Servicio CAMS no disponible")
   }
 
   const sources = {
     osm: { nominatim: Boolean(placeName), overpass: false },
     ign: {
       layers: ["IGNBaseTodo", "PNOA"],
-      flood_wms: floodRisk.ok,
+      flood_wms: floodRiskWithProxy.source === "MITECO",
     },
-    copernicus: { corine: Boolean(landCover) },
+    copernicus: {
+      corine: Boolean(landCover),
+      efas: floodRiskWithProxy.source === "Copernicus",
+      cams: airQuality.ok,
+    },
   }
 
   const contextData: ContextData = {
     center: { lat, lon },
     radius_m: radius,
+    place: {
+      name: placeName,
+      category: placeMeta.category,
+      addressLine: placeMeta.addressLine,
+      municipality: placeMeta.municipality,
+    },
+    poi_summary: buildPoiSummary(createEmptyPois()),
     sources,
     land_cover: landCover,
-    flood_risk: floodRisk,
+    flood_risk: floodRiskWithProxy,
+    air_quality: airQuality,
+    environment: {
+      landuse_summary: landuseSummary,
+      nearest_waterways: nearestWaterways,
+      elevation_m: null,
+      is_coastal: nearestWaterways.length > 0 ? isCoastal : null,
+    },
+    risks: buildRiskSummary(floodRiskWithProxy, airQuality),
     pois: createEmptyPois(),
   }
 
@@ -328,6 +460,18 @@ function ensureFloodRisk(value: FloodRiskInfo | null): FloodRiskInfo {
   }
 }
 
+function ensureAirQuality(value: AirQualityInfo | null): AirQualityInfo {
+  if (value) return value
+  return {
+    ok: false,
+    source: "Copernicus",
+    metric: "CAMS",
+    units: null,
+    details: "Servicio no disponible",
+    layer: null,
+  }
+}
+
 function buildFloodMeta(flood: FloodRiskInfo | null) {
   const fallback = ensureFloodRisk(flood)
   if (fallback.ok) {
@@ -341,6 +485,79 @@ function buildFloodMeta(flood: FloodRiskInfo | null) {
     flood_ok: false,
     flood_error: fallback.details || "Servicio no disponible",
     flood_status: "DOWN" as const,
+  }
+}
+
+function buildAirMeta(air: AirQualityInfo | null) {
+  const fallback = ensureAirQuality(air)
+  if (fallback.ok) {
+    const visualOnly = /visual/i.test(fallback.details)
+    return {
+      air_ok: true,
+      air_error: null,
+      air_status: visualOnly ? ("VISUAL_ONLY" as const) : ("OK" as const),
+    }
+  }
+  return {
+    air_ok: false,
+    air_error: fallback.details || "Servicio no disponible",
+    air_status: "DOWN" as const,
+  }
+}
+
+function buildRiskSummary(
+  flood: FloodRiskInfo | null,
+  air: AirQualityInfo | null
+): ContextData["risks"] {
+  const floodFallback = ensureFloodRisk(flood)
+  const floodVisual = /visual/i.test(floodFallback.details)
+  const floodStatus = floodFallback.ok
+    ? floodVisual
+      ? "VISUAL_ONLY"
+      : "OK"
+    : "DOWN"
+
+  const airFallback = ensureAirQuality(air)
+  const airVisual = /visual/i.test(airFallback.details)
+  const airStatus = airFallback.ok ? (airVisual ? "VISUAL_ONLY" : "OK") : "DOWN"
+
+  return {
+    flood: {
+      source: floodFallback.source,
+      status: floodStatus,
+      notes: floodFallback.details,
+      layer_enabled_supported: true,
+    },
+    air: {
+      source: airFallback.source,
+      status: airStatus,
+      notes: airFallback.details,
+      layer_enabled_supported: true,
+    },
+  }
+}
+
+function applyFloodProxy(
+  flood: FloodRiskInfo,
+  waterways: Array<{ name: string | null; type: string; distance_m: number }>
+): FloodRiskInfo {
+  if (!waterways || waterways.length === 0) return flood
+  const needsProxy =
+    !flood.ok ||
+    flood.risk_level === "desconocido" ||
+    flood.layers_hit.length === 0 ||
+    /visual/i.test(flood.details)
+  if (!needsProxy) return flood
+
+  const nearest = waterways[0]
+  const label = nearest.name ? nearest.name : nearest.type
+  const proxyLine = `Proxy OSM: agua cercana ${label} a ${nearest.distance_m} m.`
+  if (flood.details.includes("Proxy OSM")) {
+    return flood
+  }
+  return {
+    ...flood,
+    details: `${flood.details} ${proxyLine}`.trim(),
   }
 }
 
@@ -471,6 +688,25 @@ function hasAnyPois(pois: PoisByCategory) {
   )
 }
 
+function buildPoiSummary(pois: PoisByCategory) {
+  const counts = {
+    restaurants: pois.restaurants.length,
+    bars_and_clubs: pois.bars_and_clubs.length,
+    cafes: pois.cafes.length,
+    pharmacies: pois.pharmacies.length,
+    hospitals: pois.hospitals.length,
+    schools: pois.schools.length,
+    supermarkets: pois.supermarkets.length,
+    transport: pois.transport.length,
+    hotels: pois.hotels.length,
+    tourism: pois.tourism.length,
+    museums: pois.museums.length,
+    viewpoints: pois.viewpoints.length,
+  }
+
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0)
+  return { counts, total }
+}
 function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371000
   const dLat = toRadians(lat2 - lat1)

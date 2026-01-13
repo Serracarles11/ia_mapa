@@ -1,11 +1,13 @@
 import "server-only"
 
 import { fetchWmsFeatureInfo } from "@/lib/geo/wms"
+import { fetchLanduseSummary } from "@/lib/osm/overpass"
 import { type LandCoverInfo } from "@/lib/types"
 
 export type CapasUrbanismoResult = {
   land_cover: LandCoverInfo | null
   ign_layer: { layer: string; detail: string | null; source: string } | null
+  landuse_summary: string | null
 }
 
 const DEFAULT_CLC_ARCGIS =
@@ -19,14 +21,16 @@ export async function capasUrbanismo(
   lat: number,
   lon: number
 ): Promise<CapasUrbanismoResult> {
-  const [landCover, ignInfo] = await Promise.all([
+  const [landCover, ignInfo, landuse] = await Promise.all([
     fetchCorineLandCover(lat, lon),
     fetchIgnLayerInfo(lat, lon),
+    fetchLanduseSummary(lat, lon, 1200),
   ])
 
   return {
     land_cover: landCover,
     ign_layer: ignInfo,
+    landuse_summary: landuse?.summary ?? null,
   }
 }
 

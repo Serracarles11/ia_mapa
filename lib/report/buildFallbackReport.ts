@@ -7,11 +7,17 @@ export function buildFallbackReport(
   placeName: string | null,
   extraLimitations: string[] = []
 ): AiReport {
-  const { center, radius_m, land_cover, flood_risk, pois, sources } = context
+  const { center, radius_m, land_cover, flood_risk, air_quality, pois, sources } = context
   const coords = `${center.lat.toFixed(5)}, ${center.lon.toFixed(5)}`
   const placeLabel = placeName ? `Lugar: ${placeName}.` : "Lugar sin nombre."
 
   const counts = buildCounts(pois)
+  const totalPois = Object.values(counts).reduce(
+    (sum, value) => sum + (typeof value === "number" ? value : 0),
+    0
+  )
+  const densityLabel =
+    totalPois >= 30 ? "alta" : totalPois >= 12 ? "media" : "baja"
   const topPois = pickTopPois(pois, 6)
   const topLines = topPois.map(
     (poi) => `- ${poi.name} (${poi.type}, ${poi.distance_m} m)`
@@ -19,6 +25,7 @@ export function buildFallbackReport(
 
   const infraestructura = [
     `En el radio de ${Math.round(radius_m)} m se observan: ${counts.summary}.`,
+    `La densidad de servicios en el entorno es ${densityLabel}.`,
     topLines.length > 0 ? "Destacados cercanos:" : "Sin destacados cercanos.",
     ...topLines,
   ].join("\n")
@@ -29,11 +36,17 @@ export function buildFallbackReport(
       : `Riesgo desconocido. ${flood_risk.details}`
     : "No hay datos de inundacion disponibles para este punto."
 
+  const aireTexto = air_quality
+    ? air_quality.ok
+      ? `Calidad del aire: ${air_quality.details}`
+      : `Calidad del aire no disponible. ${air_quality.details}`
+    : "Calidad del aire no disponible."
+
   const usosUrbanos = land_cover
     ? `Uso del suelo dominante segun CLC 2018: ${land_cover.label} (codigo ${land_cover.code}).`
     : "No hay datos de uso del suelo CLC 2018 para este punto."
 
-  const recomendacion = buildRecommendation(topPois, counts)
+  const recomendacion = buildRecommendation(topPois, counts, densityLabel)
 
   const fuentes = buildFuentes(sources)
   const limitaciones = buildLimitaciones(context, extraLimitations)
@@ -43,7 +56,7 @@ export function buildFallbackReport(
       radius_m
     )} m. ${placeLabel}`,
     infraestructura_cercana: infraestructura,
-    riesgos: riesgoTexto.trim(),
+    riesgos: `${riesgoTexto.trim()} ${aireTexto.trim()}`.trim(),
     usos_urbanos: usosUrbanos,
     recomendacion_final: recomendacion,
     fuentes,
@@ -89,9 +102,16 @@ function pickTopPois(pois: ContextData["pois"], limit: number): PoiItem[] {
   return [...all].sort((a, b) => a.distance_m - b.distance_m).slice(0, limit)
 }
 
-function buildRecommendation(topPois: PoiItem[], counts: ReturnType<typeof buildCounts>) {
+function buildRecommendation(
+  topPois: PoiItem[],
+  counts: ReturnType<typeof buildCounts>,
+  densityLabel: string
+) {
   if (topPois.length === 0) {
-    return "No hay POIs suficientes en el radio para recomendar ubicaciones concretas."
+    return [
+      "En conjunto, el entorno muestra baja densidad de servicios dentro del radio actual.",
+      "Si buscas mas opciones, conviene ampliar el radio de analisis.",
+    ].join(" ")
   }
 
   const primary = topPois[0]
@@ -105,7 +125,7 @@ function buildRecommendation(topPois: PoiItem[], counts: ReturnType<typeof build
 
   return [
     `Opcion principal: ${primary.name} (${primary.type}, ${primary.distance_m} m).`,
-    `Hay oferta cerca: ${counts.summary}.`,
+    `El entorno muestra una densidad ${densityLabel} de servicios: ${counts.summary}.`,
     `Alternativas: ${altText}.`,
   ].join(" ")
 }
@@ -121,6 +141,12 @@ function buildFuentes(sources: ContextData["sources"]) {
   if (sources.copernicus.corine) {
     list.push("Copernicus CLC 2018")
   }
+  if (sources.copernicus.efas) {
+    list.push("Copernicus EFAS (flood)")
+  }
+  if (sources.copernicus.cams) {
+    list.push("Copernicus CAMS (aire)")
+  }
   return list
 }
 
@@ -134,6 +160,12 @@ function buildLimitaciones(
   }
   if (!context.flood_risk || !context.flood_risk.ok) {
     list.push("Sin datos de riesgo de inundacion del WMS oficial.")
+  }
+  if (!context.air_quality || !context.air_quality.ok) {
+    list.push("Sin datos CAMS de calidad del aire.")
+  }
+  if (context.risks.air.status === "VISUAL_ONLY") {
+    list.push("Calidad del aire disponible solo como capa visual.")
   }
   if (!hasPois(context)) {
     list.push("Sin POIs disponibles dentro del radio.")

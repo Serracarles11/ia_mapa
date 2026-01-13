@@ -14,6 +14,8 @@ export type NominatimReverseResult = {
   display_name: string | null
   category: string | null
   type: string | null
+  address_line?: string | null
+  municipality?: string | null
 }
 
 const DEFAULT_BASE_URL = "https://nominatim.openstreetmap.org"
@@ -71,6 +73,7 @@ export async function reverseGeocode(
   url.searchParams.set("format", "jsonv2")
   url.searchParams.set("lat", String(lat))
   url.searchParams.set("lon", String(lon))
+  url.searchParams.set("addressdetails", "1")
   url.searchParams.set("accept-language", "es")
 
   const response = await fetch(url.toString(), {
@@ -87,12 +90,21 @@ export async function reverseGeocode(
 
   const address = isRecord(data.address) ? data.address : null
   const nameFromAddress = address ? getString(address.road) : null
+  const municipality =
+    address &&
+    (getString(address.municipality) ||
+      getString(address.city) ||
+      getString(address.town) ||
+      getString(address.village) ||
+      getString(address.county))
 
   return {
     name: getString(data.name) || nameFromAddress || null,
     display_name: getString(data.display_name) || null,
     category: getString(data.category) || getString(data.class) || null,
     type: getString(data.type) || null,
+    address_line: getString(data.display_name) || null,
+    municipality: municipality ?? null,
   }
 }
 

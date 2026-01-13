@@ -1,4 +1,4 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+IA Maps es una app Next.js (App Router) que analiza un punto del mapa con OpenStreetMap, Copernicus (CLC/EFAS/CAMS) e IGN.
 
 ## Getting Started
 
@@ -16,9 +16,29 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Configuracion rapida
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Copia `.env.local.example` a `.env.local`.
+- Completa `GROQ_API_KEY` si quieres IA Groq.
+- Las capas Copernicus/EFAS/CAMS funcionan con endpoints publicos; el token es opcional.
+
+### Capas disponibles
+
+- Inundacion: Copernicus EFAS (WMS). Fallback a MITECO WMS si EFAS falla.
+- Aire: Copernicus CAMS (WMS) con capa PM2.5.
+- Uso del suelo: Copernicus CLC 2018.
+- Base cartografica: OSM / IGN / PNOA.
+
+### Limitaciones
+
+- EFAS/CAMS son capas WMS; el muestreo puntual puede no estar disponible. En ese caso se indica "capa visual".
+- Overpass puede estar temporalmente caido; la app mantiene el ultimo informe valido.
+
+### Rutas API
+
+- `POST /api/analyze-place`: analiza un punto y devuelve contexto ampliado.
+- `POST /api/place-chat`: chat con herramientas basadas en OSM.
+- `POST /api/export-pdf`: exporta el informe visible en PDF.
 
 ## Learn More
 

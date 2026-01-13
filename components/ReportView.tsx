@@ -69,8 +69,9 @@ export default function ReportView({
     )
   }
 
-  const showFallback = !aiReport
   const floodRisk = context?.flood_risk ?? null
+  const airQuality = context?.air_quality ?? null
+  const airStatus = context?.risks.air.status ?? null
   const riskLabel = floodRisk
     ? floodRisk.risk_level === "alto"
       ? "Alto"
@@ -88,13 +89,24 @@ export default function ReportView({
     (!floodRisk || floodRisk.risk_level === "desconocido") &&
       "border-slate-200 bg-slate-50 text-slate-600"
   )
+  const airToneClass = cn(
+    "border",
+    airQuality?.ok && "border-sky-200 bg-sky-50 text-sky-700",
+    airQuality && !airQuality.ok && "border-slate-200 bg-slate-50 text-slate-600",
+    !airQuality && "border-slate-200 bg-slate-50 text-slate-600"
+  )
+  const airLabel =
+    airStatus === "VISUAL_ONLY"
+      ? "CAMS visual"
+      : airQuality?.ok
+        ? "CAMS disponible"
+        : "CAMS no disponible"
 
   return (
     <div className="space-y-4">
       <Card className="space-y-2 p-4">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <Badge variant="outline">{statusCode ?? "OK"}</Badge>
-          {showFallback && <Badge variant="secondary">IA alternativa</Badge>}
           {warning && <Badge variant="destructive">Aviso</Badge>}
         </div>
         <div className="text-sm font-semibold text-slate-900">
@@ -106,6 +118,16 @@ export default function ReportView({
             : "Coordenadas no disponibles"}
           {` | Radio: ${radius} m`}
         </div>
+        {context?.place?.addressLine && (
+          <div className="text-xs text-muted-foreground">
+            {context.place.addressLine}
+          </div>
+        )}
+        {context?.place?.municipality && (
+          <div className="text-xs text-muted-foreground">
+            Municipio: {context.place.municipality}
+          </div>
+        )}
         {warning && (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             {warning}
@@ -154,6 +176,22 @@ export default function ReportView({
           )}
         </div>
         <p className="text-sm text-muted-foreground">{report.riesgos}</p>
+      </section>
+
+      <section className={sectionClass}>
+        <div className="text-sm font-semibold">Calidad del aire</div>
+        <div className="rounded-lg border bg-white p-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge className={airToneClass}>{airLabel}</Badge>
+            <span className="text-xs text-muted-foreground">
+              Fuente: {airQuality?.source ?? "Copernicus CAMS"}
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {airQuality?.details ??
+              "No hay datos de calidad del aire disponibles."}
+          </p>
+        </div>
       </section>
 
       <section className={sectionClass}>
@@ -212,6 +250,38 @@ export default function ReportView({
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {context && (
+        <section className={sectionClass}>
+          <div className="text-sm font-semibold">Entorno</div>
+          <div className="rounded-lg border bg-white p-3 text-xs text-muted-foreground">
+            <div>
+              Uso del suelo:{" "}
+              {context.environment.landuse_summary || "Sin datos"}
+            </div>
+            <div>
+              Agua cercana:{" "}
+              {context.environment.nearest_waterways.length > 0
+                ? context.environment.nearest_waterways
+                    .slice(0, 3)
+                    .map(
+                      (item) =>
+                        `${item.name || item.type} (${item.distance_m} m)`
+                    )
+                    .join(" | ")
+                : "Sin datos"}
+            </div>
+            <div>
+              Zona costera:{" "}
+              {context.environment.is_coastal === null
+                ? "Sin datos"
+                : context.environment.is_coastal
+                  ? "si"
+                  : "no"}
+            </div>
+          </div>
         </section>
       )}
     </div>

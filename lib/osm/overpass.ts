@@ -15,6 +15,19 @@ export type OverpassTaggedPoi = {
   tags: Record<string, string>
 }
 
+export type OverpassLanduseSummary = {
+  summary: string | null
+  counts: Record<string, number>
+}
+
+export type OverpassWaterway = {
+  name: string | null
+  type: string
+  lat: number
+  lon: number
+  distance_m: number
+}
+
 type OverpassElement = {
   type: string
   id: number
@@ -104,6 +117,55 @@ export async function fetchOverpassPoisByTags(
   throw lastError ?? new Error("Overpass error")
 }
 
+export async function fetchLanduseSummary(
+  lat: number,
+  lon: number,
+  radiusMeters: number
+): Promise<OverpassLanduseSummary | null> {
+  const query = buildLanduseQuery(lat, lon, radiusMeters)
+  const url = process.env.OVERPASS_BASE_URL || DEFAULT_OVERPASS_URL
+
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", "User-Agent": "ia-maps-app" },
+      body: query,
+      cache: "no-store",
+    })
+
+    if (!response.ok) return null
+    const data = (await response.json()) as { elements?: OverpassElement[] }
+    return summarizeLanduse(data?.elements ?? [])
+  } catch {
+    return null
+  }
+}
+
+export async function fetchNearestWaterways(
+  lat: number,
+  lon: number,
+  radiusMeters: number,
+  limit = 5
+): Promise<OverpassWaterway[]> {
+  const query = buildWaterwayQuery(lat, lon, radiusMeters)
+  const url = process.env.OVERPASS_BASE_URL || DEFAULT_OVERPASS_URL
+
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", "User-Agent": "ia-maps-app" },
+      body: query,
+      cache: "no-store",
+    })
+
+    if (!response.ok) return []
+    const data = (await response.json()) as { elements?: OverpassElement[] }
+    return normalizeWaterways(lat, lon, data?.elements ?? []).slice(0, limit)
+  } catch {
+    return []
+  }
+}
+
 function buildOverpassQuery(lat: number, lon: number, radiusMeters: number) {
   return `
 [out:json][timeout:25];
@@ -127,6 +189,39 @@ function buildOverpassQuery(lat: number, lon: number, radiusMeters: number) {
   relation["public_transport"~"platform|station"](around:${radiusMeters},${lat},${lon});
 );
 out center 120;
+`
+}
+
+function buildLanduseQuery(lat: number, lon: number, radiusMeters: number) {
+  return `
+[out:json][timeout:25];
+(
+  way["landuse"](around:${radiusMeters},${lat},${lon});
+  relation["landuse"](around:${radiusMeters},${lat},${lon});
+  way["natural"](around:${radiusMeters},${lat},${lon});
+  relation["natural"](around:${radiusMeters},${lat},${lon});
+  way["surface"](around:${radiusMeters},${lat},${lon});
+  relation["surface"](around:${radiusMeters},${lat},${lon});
+);
+out center 80;
+`
+}
+
+function buildWaterwayQuery(lat: number, lon: number, radiusMeters: number) {
+  return `
+[out:json][timeout:25];
+(
+  node["waterway"](around:${radiusMeters},${lat},${lon});
+  way["waterway"](around:${radiusMeters},${lat},${lon});
+  relation["waterway"](around:${radiusMeters},${lat},${lon});
+  way["natural"="water"](around:${radiusMeters},${lat},${lon});
+  relation["natural"="water"](around:${radiusMeters},${lat},${lon});
+  way["natural"="coastline"](around:${radiusMeters},${lat},${lon});
+  relation["natural"="coastline"](around:${radiusMeters},${lat},${lon});
+  way["water"](around:${radiusMeters},${lat},${lon});
+  relation["water"](around:${radiusMeters},${lat},${lon});
+);
+out center 80;
 `
 }
 
@@ -234,6 +329,69 @@ function normalizeOverpassWithTags(
       }
     })
     .filter((item): item is OverpassTaggedPoi => Boolean(item))
+}
+
+function summarizeLanduse(elements: OverpassElement[]): OverpassLanduseSummary {
+  const counts: Record<string, number> = {}
+
+  for (const element of elements) {
+    const tags = element.tags ?? {}
+    const type =
+      tags.landuse ||
+      tags.natural ||
+      tags.surface ||
+      tags.landcover ||
+      null
+    if (!type) continue
+    counts[type] = (counts[type] ?? 0) + 1
+  }
+
+  const entries = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([key, value]) => `${key} (${value})`)
+
+  return {
+    counts,
+    summary: entries.length > 0 ? entries.join(", ") : null,
+  }
+}
+
+function normalizeWaterways(
+  lat: number,
+  lon: number,
+  elements: OverpassElement[]
+): OverpassWaterway[] {
+  return elements
+    .map((element) => {
+      const tags = element.tags ?? {}
+      const latValue = element.lat ?? element.center?.lat
+      const lonValue = element.lon ?? element.center?.lon
+      if (typeof latValue !== "number" || typeof lonValue !== "number") {
+        return null
+      }
+
+      const type =
+        tags.waterway ||
+        (tags.natural === "coastline" ? "coastline" : tags.natural) ||
+        tags.water ||
+        "water"
+
+      const name = tags.name || null
+      const distance = Math.round(
+        distanceMeters(lat, lon, latValue, lonValue)
+      )
+
+      return {
+        name,
+        type,
+        lat: latValue,
+        lon: lonValue,
+        distance_m: distance,
+      }
+    })
+    .filter((item): item is OverpassWaterway => Boolean(item))
+    .sort((a, b) => a.distance_m - b.distance_m)
 }
 
 function pickTypeFromTags(
@@ -383,4 +541,22 @@ async function fetchWithTimeout(
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371000
+  const dLat = toRadians(lat2 - lat1)
+  const dLon = toRadians(lon2 - lon1)
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+function toRadians(value: number) {
+  return (value * Math.PI) / 180
 }

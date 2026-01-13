@@ -13,6 +13,7 @@ import {
 import L, { type LeafletMouseEvent } from "leaflet"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Tooltip,
   TooltipContent,
@@ -25,12 +26,16 @@ import { type AiReport, type ContextData } from "@/lib/types"
 import RightPanel from "@/components/RightPanel"
 import SearchBar from "@/components/SearchBar"
 import { type LayerKey, type LayerState } from "@/components/LayerControls"
+import { getCamsLayerConfig, getEfasLayerConfig } from "@/lib/copernicus"
 import {
   Copy,
   Eraser,
   Loader2,
   LocateFixed,
   MapPin,
+  PanelRight,
+  ShieldAlert,
+  Wind,
 } from "lucide-react"
 
 const RADIUS_OPTIONS = [500, 800, 1200, 2000]
@@ -43,9 +48,9 @@ const PNOA_WMS_LAYER = "OI.OrthoimageCoverage"
 const CLC_WMS_URL =
   "https://image.discomap.eea.europa.eu/arcgis/services/Corine/CLC2018_WM/MapServer/WMSServer"
 const CLC_WMS_LAYER = "13"
-const FLOOD_WMS_URL =
+const MITECO_FLOOD_WMS_URL =
   "https://servicios.mapama.gob.es/arcgis/services/Agua/Riesgo/MapServer/WMSServer"
-const FLOOD_WMS_LAYER = "AreaImp_100"
+const MITECO_FLOOD_WMS_LAYER = "AreaImp_100"
 
 type MapInnerProps = {
   initialLat?: number | null
@@ -63,6 +68,9 @@ type AnalyzeResponse = {
   flood_ok?: boolean
   flood_error?: string | null
   flood_status?: "OK" | "DOWN"
+  air_ok?: boolean
+  air_error?: string | null
+  air_status?: "OK" | "DOWN" | "VISUAL_ONLY"
   status?: "OK" | "NO_POIS" | "OVERPASS_DOWN"
   aiReport?: AiReport | null
   fallbackReport?: AiReport | null
@@ -85,6 +93,9 @@ type PanelData = {
   floodOk: boolean | null
   floodError: string | null
   floodStatus: "OK" | "DOWN" | null
+  airOk: boolean | null
+  airError: string | null
+  airStatus: "OK" | "DOWN" | "VISUAL_ONLY" | null
 }
 
 function ClickHandler({ onClick }: { onClick: (lat: number, lon: number) => void }) {
@@ -124,6 +135,9 @@ export default function MapInner({
     floodOk: null,
     floodError: null,
     floodStatus: null,
+    airOk: null,
+    airError: null,
+    airStatus: null,
   })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [searchValue, setSearchValue] = useState("")
@@ -134,6 +148,7 @@ export default function MapInner({
     pnoa: false,
     clc: false,
     flood: false,
+    air: false,
   })
 
   const abortRef = useRef<AbortController | null>(null)
@@ -141,6 +156,8 @@ export default function MapInner({
   const lastGoodRef = useRef<PanelData | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const autoAnalyzeRef = useRef(false)
+  const efasConfig = useMemo(() => getEfasLayerConfig(), [])
+  const camsConfig = useMemo(() => getCamsLayerConfig(), [])
 
   const initialCenter = useMemo<[number, number]>(() => {
     if (typeof initialLat === "number" && typeof initialLon === "number") {
@@ -188,6 +205,9 @@ export default function MapInner({
         floodOk: null,
         floodError: null,
         floodStatus: null,
+        airOk: null,
+        airError: null,
+        airStatus: null,
       }))
 
       toast("Analizando entorno...")
@@ -237,6 +257,19 @@ export default function MapInner({
         const floodStatus =
           data.flood_status ??
           (floodOk === null ? null : floodOk ? "OK" : "DOWN")
+        const airOk =
+          typeof data.air_ok === "boolean"
+            ? data.air_ok
+            : data.contextData?.air_quality?.ok ?? null
+        const airError =
+          typeof data.air_error === "string"
+            ? data.air_error
+            : data.contextData?.air_quality?.ok
+              ? null
+              : data.contextData?.air_quality?.details ?? null
+        const airStatus =
+          data.air_status ??
+          (airOk === null ? null : airOk ? "OK" : "DOWN")
 
         const nextData: PanelData = {
           placeName: data.placeName ?? null,
@@ -252,6 +285,9 @@ export default function MapInner({
           floodOk,
           floodError,
           floodStatus,
+          airOk,
+          airError,
+          airStatus,
         }
 
         if (responseStatus === "OVERPASS_DOWN") {
@@ -275,14 +311,11 @@ export default function MapInner({
         if (warnings.length > 0) {
           const toastWarning = warnings.find((item) => {
             const lower = item.toLowerCase()
-            return lower.includes("overpass") || lower.includes("ia")
+            return lower.includes("overpass")
           })
           if (toastWarning) {
             toast.warning(toastWarning)
           }
-        }
-        if (!data.aiReport && data.fallbackReport) {
-          toast("IA no disponible. Mostrando informe alternativo.")
         }
 
         setStatus("ready")
@@ -392,17 +425,20 @@ export default function MapInner({
       coords: null,
       requestId: null,
       status: null,
-    overpassOk: null,
-    overpassError: null,
-    floodOk: null,
-    floodError: null,
-    floodStatus: null,
-  })
+      overpassOk: null,
+      overpassError: null,
+      floodOk: null,
+      floodError: null,
+      floodStatus: null,
+      airOk: null,
+      airError: null,
+      airStatus: null,
+    })
   }
 
   function handleToggleLayer(layer: LayerKey, next: boolean) {
     setLayers((prev) => {
-      if (layer === "clc" || layer === "flood") {
+      if (layer === "clc" || layer === "flood" || layer === "air") {
         return { ...prev, [layer]: next }
       }
 
@@ -434,16 +470,24 @@ export default function MapInner({
 
   const aiBadge = useMemo(() => {
     if (status === "idle") {
-      return { label: "IA en espera", tone: "muted" as const }
+      return { label: "Informe en espera", tone: "muted" as const }
+    }
+    if (status === "loading") {
+      return { label: "Generando informe", tone: "muted" as const }
     }
     if (panelData.aiReport) {
       return { label: "IA OK", tone: "ok" as const }
     }
     if (panelData.report) {
-      return { label: "IA alternativa", tone: "warn" as const }
+      return { label: "Informe OK", tone: "ok" as const }
     }
-    return { label: "IA sin datos", tone: "error" as const }
+    return { label: "Informe pendiente", tone: "muted" as const }
   }, [panelData.aiReport, panelData.report, status])
+
+  const floodLayerDisabled =
+    !panelData.context || panelData.floodStatus === "DOWN"
+  const airLayerDisabled =
+    !panelData.context || panelData.airStatus === "DOWN"
 
   const badgeToneClass = (tone: "ok" | "warn" | "error" | "muted") =>
     cn(
@@ -478,7 +522,7 @@ export default function MapInner({
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-4 px-4 py-4">
+      <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-4 px-4 py-4 min-h-0">
         <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
           <div className="flex min-h-0 flex-1 flex-col gap-4">
             <div className="rounded-2xl border bg-white p-4 shadow-sm">
@@ -573,11 +617,74 @@ export default function MapInner({
                 </div>
               </div>
 
-              <div className="relative min-h-[240px] flex-1 overflow-hidden rounded-xl border bg-muted/20">
-                <MapContainer
-                  center={initialCenter}
-                  zoom={12}
-                  className={cn(
+            <div className="relative min-h-[240px] flex-1 overflow-hidden rounded-xl border bg-muted/20">
+              <div className="absolute right-3 top-3 z-[400] flex flex-col gap-2">
+                <Card className="w-48 border bg-white/95 p-2 text-xs shadow-sm backdrop-blur">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <PanelRight className="size-3" />
+                    Controles rapidos
+                  </div>
+                  <div className="grid gap-2">
+                    <Button
+                      variant={layers.flood ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 justify-start text-xs"
+                      onClick={() => handleToggleLayer("flood", !layers.flood)}
+                      disabled={floodLayerDisabled}
+                    >
+                      <ShieldAlert className="size-3" />
+                      Inundacion
+                    </Button>
+                    <Button
+                      variant={layers.air ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 justify-start text-xs"
+                      onClick={() => handleToggleLayer("air", !layers.air)}
+                      disabled={airLayerDisabled}
+                    >
+                      <Wind className="size-3" />
+                      Aire
+                    </Button>
+                    <Button
+                      variant={layers.clc ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 justify-start text-xs"
+                      onClick={() => handleToggleLayer("clc", !layers.clc)}
+                    >
+                      CLC
+                    </Button>
+                    <Button
+                      variant={layers.pnoa ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 justify-start text-xs"
+                      onClick={() => handleToggleLayer("pnoa", !layers.pnoa)}
+                    >
+                      Satelite
+                    </Button>
+                  </div>
+                </Card>
+                {layers.flood && (
+                  <Card className="w-48 border bg-white/95 p-2 text-[11px] shadow-sm backdrop-blur">
+                    <div className="font-semibold">Leyenda inundacion</div>
+                    <div className="mt-1 text-muted-foreground">
+                      Zonas potencialmente inundables (EFAS/MITECO).
+                    </div>
+                  </Card>
+                )}
+                {layers.air && (
+                  <Card className="w-48 border bg-white/95 p-2 text-[11px] shadow-sm backdrop-blur">
+                    <div className="font-semibold">Leyenda aire</div>
+                    <div className="mt-1 text-muted-foreground">
+                      Capa CAMS (PM2.5). Visualizacion sin valor puntual si no
+                      hay muestreo.
+                    </div>
+                  </Card>
+                )}
+              </div>
+              <MapContainer
+                center={initialCenter}
+                zoom={12}
+                className={cn(
                     "h-full w-full",
                     status === "loading" ? "cursor-wait" : "cursor-crosshair"
                   )}
@@ -620,11 +727,29 @@ export default function MapInner({
 
                   {layers.flood && (
                     <WMSTileLayer
-                      url={FLOOD_WMS_URL}
-                      layers={FLOOD_WMS_LAYER}
+                      url={
+                        panelData.context?.flood_risk?.source === "MITECO"
+                          ? MITECO_FLOOD_WMS_URL
+                          : efasConfig.baseUrl
+                      }
+                      layers={
+                        panelData.context?.flood_risk?.source === "MITECO"
+                          ? MITECO_FLOOD_WMS_LAYER
+                          : efasConfig.layer
+                      }
                       format="image/png"
                       transparent
                       opacity={0.55}
+                    />
+                  )}
+
+                  {layers.air && (
+                    <WMSTileLayer
+                      url={camsConfig.baseUrl}
+                      layers={camsConfig.layer}
+                      format="image/png"
+                      transparent
+                      opacity={0.5}
                     />
                   )}
 
@@ -670,7 +795,7 @@ export default function MapInner({
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-1 lg:sticky lg:top-4 lg:h-[calc(100vh-96px)] lg:w-[420px] lg:flex-none lg:self-start lg:overflow-hidden">
+          <div className="flex min-h-0 flex-1 lg:sticky lg:top-4 lg:h-[calc(100vh-96px)] lg:w-[420px] lg:flex-none lg:self-start">
             <RightPanel
               status={status}
               report={panelData.report}
@@ -686,6 +811,9 @@ export default function MapInner({
               floodOk={panelData.floodOk}
               floodError={panelData.floodError}
               floodStatus={panelData.floodStatus}
+              airOk={panelData.airOk}
+              airError={panelData.airError}
+              airStatus={panelData.airStatus}
               layers={layers}
               onToggleLayer={handleToggleLayer}
               onRetry={() => {
