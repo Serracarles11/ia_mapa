@@ -5,6 +5,7 @@ import {
   Circle,
   MapContainer,
   Marker,
+  Polyline,
   TileLayer,
   Tooltip as LeafletTooltip,
   WMSTileLayer,
@@ -27,12 +28,16 @@ import RightPanel from "@/components/RightPanel"
 import SearchBar from "@/components/SearchBar"
 import { type LayerKey, type LayerState } from "@/components/LayerControls"
 import { getCamsLayerConfig, getEfasLayerConfig } from "@/lib/copernicus"
+import { buildComparisonSummary } from "@/lib/report/comparePlaces"
+import AircraftLayer, { type AircraftStatus } from "@/components/AircraftLayer"
 import {
+  ArrowLeftRight,
   Copy,
   Eraser,
   Loader2,
   LocateFixed,
   MapPin,
+  Plane,
   PanelRight,
   ShieldAlert,
   Wind,
@@ -67,7 +72,7 @@ type AnalyzeResponse = {
   overpass_error?: string | null
   flood_ok?: boolean
   flood_error?: string | null
-  flood_status?: "OK" | "DOWN"
+  flood_status?: "OK" | "DOWN" | "VISUAL_ONLY"
   air_ok?: boolean
   air_error?: string | null
   air_status?: "OK" | "DOWN" | "VISUAL_ONLY"
@@ -78,6 +83,7 @@ type AnalyzeResponse = {
   warning?: string | null
   error?: string
 }
+
 
 type PanelData = {
   placeName: string | null
@@ -92,7 +98,7 @@ type PanelData = {
   overpassError: string | null
   floodOk: boolean | null
   floodError: string | null
-  floodStatus: "OK" | "DOWN" | null
+  floodStatus: "OK" | "DOWN" | "VISUAL_ONLY" | null
   airOk: boolean | null
   airError: string | null
   airStatus: "OK" | "DOWN" | "VISUAL_ONLY" | null
@@ -121,6 +127,15 @@ export default function MapInner({
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
     "idle"
   )
+  const [compareMode, setCompareMode] = useState(false)
+  const [compareStatus, setCompareStatus] = useState<
+    "idle" | "loading" | "error"
+  >("idle")
+  const [compareError, setCompareError] = useState<string | null>(null)
+  const [aircraftStatus, setAircraftStatus] = useState<AircraftStatus>({
+    state: "idle",
+    count: 0,
+  })
   const [panelData, setPanelData] = useState<PanelData>({
     placeName: null,
     report: null,
@@ -149,10 +164,13 @@ export default function MapInner({
     clc: false,
     flood: false,
     air: false,
+    aircraft: false,
   })
 
   const abortRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef(0)
+  const compareAbortRef = useRef<AbortController | null>(null)
+  const compareRequestIdRef = useRef(0)
   const lastGoodRef = useRef<PanelData | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const autoAnalyzeRef = useRef(false)
@@ -183,10 +201,15 @@ export default function MapInner({
   const analyzePlace = useCallback(
     async (lat: number, lon: number, radius: number) => {
       abortRef.current?.abort()
+      compareAbortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
       const requestId = requestIdRef.current + 1
       requestIdRef.current = requestId
+
+      setCompareMode(false)
+      setCompareStatus("idle")
+      setCompareError(null)
 
       setStatus("loading")
       setErrorMessage(null)
@@ -256,6 +279,7 @@ export default function MapInner({
               : data.contextData?.flood_risk?.details ?? null
         const floodStatus =
           data.flood_status ??
+          data.contextData?.flood_risk?.status ??
           (floodOk === null ? null : floodOk ? "OK" : "DOWN")
         const airOk =
           typeof data.air_ok === "boolean"
@@ -269,6 +293,7 @@ export default function MapInner({
               : data.contextData?.air_quality?.details ?? null
         const airStatus =
           data.air_status ??
+          data.contextData?.air_quality?.status ??
           (airOk === null ? null : airOk ? "OK" : "DOWN")
 
         const nextData: PanelData = {
@@ -292,11 +317,15 @@ export default function MapInner({
 
         if (responseStatus === "OVERPASS_DOWN") {
           const fallback = lastGoodRef.current
-          const fallbackCoords = fallback?.coords ?? nextData.coords
+          const nextReport = nextData.report ?? fallback?.report ?? null
+          const nextContext = nextData.context ?? fallback?.context ?? null
+          const fallbackCoords = nextContext?.center
+            ? { lat: nextContext.center.lat, lon: nextContext.center.lon }
+            : nextData.coords
           setPanelData({
             ...nextData,
-            report: fallback?.report ?? nextData.report,
-            context: fallback?.context ?? nextData.context,
+            report: nextReport,
+            context: nextContext,
             placeName: nextData.placeName ?? fallback?.placeName ?? null,
             coords: fallbackCoords,
             warning: nextData.warning ?? "Overpass no disponible",
@@ -326,8 +355,71 @@ export default function MapInner({
         setStatus("error")
       }
     },
-    [toast]
+    []
   )
+
+  async function handleCompareSelection(lat: number, lon: number) {
+    if (!panelData.context) {
+      setCompareMode(false)
+      setCompareError("Selecciona un punto base antes de comparar.")
+      return
+    }
+
+    compareAbortRef.current?.abort()
+    const controller = new AbortController()
+    compareAbortRef.current = controller
+    const requestId = compareRequestIdRef.current + 1
+    compareRequestIdRef.current = requestId
+
+    setCompareStatus("loading")
+    setCompareError(null)
+
+    try {
+      const res = await fetch("/api/analyze-place", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          center: { lat, lon },
+          radius_m: radiusMeters,
+          request_id: requestId,
+        }),
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        const errorText = await res.text()
+        throw new Error(errorText || "No se pudo comparar.")
+      }
+
+      const data = (await res.json()) as AnalyzeResponse
+      if (requestId !== compareRequestIdRef.current) return
+      if (!data.ok || !data.contextData) {
+        throw new Error(data.error || "No se pudo comparar.")
+      }
+
+      const summary = buildComparisonSummary(
+        panelData.context,
+        data.contextData,
+        panelData.placeName,
+        data.placeName ?? null
+      )
+
+      setPanelData((prev) => ({
+        ...prev,
+        context: prev.context ? { ...prev.context, comparison: summary } : prev.context,
+      }))
+      setCompareStatus("idle")
+      setCompareMode(false)
+      toast.success("Comparacion lista")
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      if (requestId !== compareRequestIdRef.current) return
+      setCompareStatus("error")
+      setCompareMode(false)
+      setCompareError("No se pudo comparar los sitios.")
+      toast.error("No se pudo comparar")
+    }
+  }
 
   useEffect(() => {
     if (autoAnalyzeRef.current) return
@@ -348,7 +440,7 @@ export default function MapInner({
     mapRef.current?.setView([initialLat, initialLon], 14, { animate: false })
   }, [initialLat, initialLon, initialRadius, radiusMeters, analyzePlace])
 
-  async function handleSearch() {
+  const handleSearch = useCallback(async () => {
     if (!searchValue.trim()) return
     setSearchLoading(true)
     toast("Buscando direccion...")
@@ -378,12 +470,16 @@ export default function MapInner({
       mapRef.current?.flyTo([lat, lon], 14, { animate: true })
       analyzePlace(lat, lon, radiusMeters)
       toast.success(`Resultado: ${display_name}`)
-    } catch (err) {
+    } catch {
       toast.error("No se encontro la direccion")
     } finally {
       setSearchLoading(false)
     }
-  }
+  }, [searchValue, radiusMeters, analyzePlace])
+
+  const handleSearchValueChange = useCallback((next: string) => {
+    setSearchValue(next)
+  }, [])
 
   function handleRadiusChange(nextRadius: number) {
     setRadiusMeters(nextRadius)
@@ -406,16 +502,21 @@ export default function MapInner({
     try {
       await navigator.clipboard.writeText(text)
       toast.success("Coordenadas copiadas")
-    } catch (error) {
+    } catch {
       toast.error("No se pudo copiar")
     }
   }
 
   function handleClear() {
     abortRef.current?.abort()
+    compareAbortRef.current?.abort()
     setPosition(null)
     setStatus("idle")
     setErrorMessage(null)
+    setCompareMode(false)
+    setCompareStatus("idle")
+    setCompareError(null)
+    setAircraftStatus({ state: "idle", count: 0 })
     setPanelData({
       placeName: null,
       report: null,
@@ -436,9 +537,14 @@ export default function MapInner({
     })
   }
 
-  function handleToggleLayer(layer: LayerKey, next: boolean) {
+  const handleToggleLayer = useCallback((layer: LayerKey, next: boolean) => {
     setLayers((prev) => {
-      if (layer === "clc" || layer === "flood" || layer === "air") {
+      if (
+        layer === "clc" ||
+        layer === "flood" ||
+        layer === "air" ||
+        layer === "aircraft"
+      ) {
         return { ...prev, [layer]: next }
       }
 
@@ -456,7 +562,14 @@ export default function MapInner({
 
       return nextState
     })
-  }
+  }, [])
+
+  const handleAircraftStatusChange = useCallback((next: AircraftStatus) => {
+    setAircraftStatus(next)
+    if (next.state === "error") {
+      toast.warning(next.notice || "Radar ADS-B no disponible.")
+    }
+  }, [])
 
   const overpassBadge = useMemo(() => {
     if (panelData.overpassOk === null) {
@@ -488,6 +601,25 @@ export default function MapInner({
     !panelData.context || panelData.floodStatus === "DOWN"
   const airLayerDisabled =
     !panelData.context || panelData.airStatus === "DOWN"
+  const canCompare = Boolean(panelData.context) && status === "ready"
+  const comparison = panelData.context?.comparison ?? null
+  const comparisonTargetLabel = comparison
+    ? comparison.target.name ||
+      `${comparison.target.coords.lat.toFixed(4)}, ${comparison.target.coords.lon.toFixed(4)}`
+    : null
+  const panelLat = panelData.coords?.lat ?? null
+  const panelLon = panelData.coords?.lon ?? null
+  const positionLat = position?.[0] ?? null
+  const positionLon = position?.[1] ?? null
+  const aircraftCenter = useMemo(() => {
+    if (panelLat != null && panelLon != null) {
+      return { lat: panelLat, lon: panelLon }
+    }
+    if (positionLat != null && positionLon != null) {
+      return { lat: positionLat, lon: positionLon }
+    }
+    return null
+  }, [panelLat, panelLon, positionLat, positionLon])
 
   const badgeToneClass = (tone: "ok" | "warn" | "error" | "muted") =>
     cn(
@@ -531,7 +663,7 @@ export default function MapInner({
               </div>
               <SearchBar
                 value={searchValue}
-                onChange={setSearchValue}
+                onChange={handleSearchValueChange}
                 onSearch={handleSearch}
                 loading={searchLoading}
               />
@@ -596,6 +728,39 @@ export default function MapInner({
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
+                        variant={compareMode ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => {
+                          if (!canCompare) return
+                          if (compareMode) {
+                            setCompareMode(false)
+                            setCompareStatus("idle")
+                            return
+                          }
+                          setPanelData((prev) => ({
+                            ...prev,
+                            context: prev.context
+                              ? { ...prev.context, comparison: null }
+                              : prev.context,
+                          }))
+                          setCompareMode(true)
+                          setCompareError(null)
+                          toast("Selecciona el segundo punto para comparar.")
+                        }}
+                        disabled={!canCompare || compareStatus === "loading"}
+                      >
+                        <ArrowLeftRight className="size-4" />
+                        {compareMode ? "Cancelar" : "Comparar"}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Selecciona un segundo punto para comparar
+                    </TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
                         variant="ghost"
                         size="sm"
                         onClick={handleClear}
@@ -608,14 +773,65 @@ export default function MapInner({
                     <TooltipContent>Limpiar seleccion</TooltipContent>
                   </Tooltip>
 
-                  {status === "loading" && (
-                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">
-                      <Loader2 className="size-3 animate-spin" />
-                      Analizando...
-                    </Badge>
-                  )}
-                </div>
+                {status === "loading" && (
+                  <Badge className="border-blue-200 bg-blue-50 text-blue-700">
+                    <Loader2 className="size-3 animate-spin" />
+                    Analizando...
+                  </Badge>
+                )}
               </div>
+            </div>
+
+            {(compareMode ||
+              comparison ||
+              compareStatus === "loading" ||
+              compareError) && (
+              <div className="mt-3 space-y-2">
+                {compareMode && (
+                  <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                    Modo comparacion activo. Selecciona el segundo punto.
+                  </div>
+                )}
+                {compareStatus === "loading" && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    Comparando sitios...
+                  </div>
+                )}
+                {compareError && (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    {compareError}
+                  </div>
+                )}
+                {comparison && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                    <div>
+                      <div className="font-semibold">
+                        Comparando con {comparisonTargetLabel || "punto comparado"}
+                      </div>
+                      <div className="text-[11px] text-emerald-900/80">
+                        Radio: {comparison.target.radius_m} m
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setPanelData((prev) => ({
+                          ...prev,
+                          context: prev.context
+                            ? { ...prev.context, comparison: null }
+                            : prev.context,
+                        }))
+                        setCompareStatus("idle")
+                        setCompareError(null)
+                      }}
+                    >
+                      Quitar comparacion
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="relative min-h-[240px] flex-1 overflow-hidden rounded-xl border bg-muted/20">
               <div className="absolute right-3 top-3 z-[400] flex flex-col gap-2">
@@ -644,6 +860,17 @@ export default function MapInner({
                     >
                       <Wind className="size-3" />
                       Aire
+                    </Button>
+                    <Button
+                      variant={layers.aircraft ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 justify-start text-xs"
+                      onClick={() =>
+                        handleToggleLayer("aircraft", !layers.aircraft)
+                      }
+                    >
+                      <Plane className="size-3" />
+                      Aviones
                     </Button>
                     <Button
                       variant={layers.clc ? "default" : "outline"}
@@ -678,6 +905,33 @@ export default function MapInner({
                       Capa CAMS (PM2.5). Visualizacion sin valor puntual si no
                       hay muestreo.
                     </div>
+                  </Card>
+                )}
+                {layers.aircraft && (
+                  <Card className="w-48 border bg-white/95 p-2 text-[11px] shadow-sm backdrop-blur">
+                    <div className="font-semibold">Aviones en tiempo real</div>
+                    <div className="mt-1 text-muted-foreground">
+                      {aircraftStatus.state === "loading"
+                        ? "Actualizando trafico aereo..."
+                        : aircraftStatus.state === "error"
+                          ? aircraftStatus.notice || "No hay datos disponibles."
+                          : `${aircraftStatus.count} aviones detectados`}
+                    </div>
+                    {aircraftStatus.mode === "demo" && (
+                      <div className="mt-1 text-[10px] text-amber-700">
+                        Modo demo
+                      </div>
+                    )}
+                    {aircraftStatus.source && (
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        Fuente: {aircraftStatus.source}
+                      </div>
+                    )}
+                    {aircraftStatus.notice && (
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        {aircraftStatus.notice}
+                      </div>
+                    )}
                   </Card>
                 )}
               </div>
@@ -755,6 +1009,14 @@ export default function MapInner({
 
                   <ClickHandler
                     onClick={(nextLat, nextLon) => {
+                      if (compareMode) {
+                        mapRef.current?.flyTo([nextLat, nextLon], 14, {
+                          animate: true,
+                        })
+                        handleCompareSelection(nextLat, nextLon)
+                        return
+                      }
+
                       setPosition([nextLat, nextLon])
                       mapRef.current?.flyTo([nextLat, nextLon], 14, {
                         animate: true,
@@ -781,6 +1043,47 @@ export default function MapInner({
                       </Marker>
                     </>
                   )}
+
+                  {comparison && (
+                    <>
+                      <Polyline
+                        positions={[
+                          [comparison.base.coords.lat, comparison.base.coords.lon],
+                          [comparison.target.coords.lat, comparison.target.coords.lon],
+                        ]}
+                        pathOptions={{ color: "#f59e0b", dashArray: "4 6" }}
+                      />
+                      <Circle
+                        center={[
+                          comparison.target.coords.lat,
+                          comparison.target.coords.lon,
+                        ]}
+                        radius={comparison.target.radius_m}
+                        pathOptions={{
+                          color: "#f59e0b",
+                          fillColor: "#fde68a",
+                          fillOpacity: 0.2,
+                        }}
+                      />
+                      <Marker
+                        position={[
+                          comparison.target.coords.lat,
+                          comparison.target.coords.lon,
+                        ]}
+                      >
+                        <LeafletTooltip direction="top" offset={[0, -10]}>
+                          Punto comparado
+                        </LeafletTooltip>
+                      </Marker>
+                    </>
+                  )}
+
+                  <AircraftLayer
+                    enabled={layers.aircraft}
+                    center={aircraftCenter}
+                    radius_m={radiusMeters}
+                    onStatusChange={handleAircraftStatusChange}
+                  />
                 </MapContainer>
 
                 {!position && status === "idle" && (
