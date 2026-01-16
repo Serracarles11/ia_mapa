@@ -1,4 +1,4 @@
-import { type ComparisonSummary, type ContextData } from "@/lib/types"
+import { type ComparisonMetrics, type ComparisonSummary, type ContextData } from "@/lib/types"
 
 export function buildComparisonSummary(
   base: ContextData,
@@ -9,6 +9,8 @@ export function buildComparisonSummary(
   const baseTotal = getPoiTotal(base)
   const targetTotal = getPoiTotal(target)
   const diff = targetTotal - baseTotal
+  const baseMetrics = buildComparisonMetrics(base)
+  const targetMetrics = buildComparisonMetrics(target)
 
   const distanceKm = calcDistanceKm(
     base.center.lat,
@@ -58,6 +60,36 @@ export function buildComparisonSummary(
     },
     highlights,
     created_at: new Date().toISOString(),
+    base_metrics: baseMetrics,
+    target_metrics: targetMetrics,
+  }
+}
+
+export function buildComparisonMetrics(context: ContextData): ComparisonMetrics {
+  const counts = context.poi_summary?.counts ?? {
+    restaurantes: context.pois.restaurants.length,
+    bares: context.pois.bars_and_clubs.length,
+    cafes: context.pois.cafes.length,
+    farmacias: context.pois.pharmacies.length,
+    hospitales: context.pois.hospitals.length,
+    colegios: context.pois.schools.length,
+    supermercados: context.pois.supermarkets.length,
+    transporte: context.pois.transport.length,
+    hoteles: context.pois.hotels.length,
+    turismo:
+      context.pois.tourism.length +
+      context.pois.museums.length +
+      context.pois.viewpoints.length,
+  }
+
+  return {
+    poi_total: getPoiTotal(context),
+    poi_counts: counts,
+    flood_risk: formatFlood(context),
+    air_quality: formatAir(context),
+    land_cover: formatLand(context),
+    waterway: formatWater(context),
+    coastal: context.environment.is_coastal ?? null,
   }
 }
 

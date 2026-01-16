@@ -166,8 +166,13 @@ export default function ChatView({
         <div className="text-xs font-semibold uppercase tracking-wide">
           Lugar actual
         </div>
-        <div className="text-sm font-semibold text-slate-900">{placeLabel}</div>
-        <div>
+        <div
+          className="truncate text-sm font-semibold text-slate-900"
+          title={placeLabel}
+        >
+          {placeLabel}
+        </div>
+        <div className="text-[11px] text-muted-foreground">
           {coords ? `${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}` : ""}
           {coords ? ` | Radio: ${radius} m` : ""}
         </div>
@@ -185,13 +190,13 @@ export default function ChatView({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1">
         {quickSuggestions.map((suggestion) => (
           <Button
             key={suggestion}
             size="sm"
             variant="outline"
-            className="h-7 px-2 text-xs"
+            className="h-7 shrink-0 px-2 text-xs"
             onClick={() => sendMessage(suggestion)}
             disabled={!canChat || status === "loading"}
           >
@@ -200,7 +205,7 @@ export default function ChatView({
         ))}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+      <div className="flex min-h-[220px] flex-1 flex-col gap-3 overflow-y-auto pr-1">
         {messages.length === 0 && (
           <div className="rounded-lg border border-dashed px-3 py-4 text-xs text-muted-foreground">
             Haz una pregunta para recibir recomendaciones basadas en el entorno.

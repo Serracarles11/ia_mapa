@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { PDFDocument, PDFFont, StandardFonts, rgb } from "pdf-lib"
 
-import { type AiReport, type ContextData } from "@/lib/types"
+import { type AiReport, type ComparisonMetrics, type ContextData } from "@/lib/types"
 
 type ExportPayload = {
   placeName?: string | null
@@ -281,9 +281,15 @@ export async function POST(req: Request) {
     const comp = context.comparison
     const baseLine = `Base: ${comp.base.name || "Punto base"} | ${comp.base.coords.lat.toFixed(5)}, ${comp.base.coords.lon.toFixed(5)} | Radio ${comp.base.radius_m} m`
     const targetLine = `Comparado: ${comp.target.name || "Punto comparado"} | ${comp.target.coords.lat.toFixed(5)}, ${comp.target.coords.lon.toFixed(5)} | Radio ${comp.target.radius_m} m`
-    const lines = [baseLine, targetLine, ...comp.highlights]
+    const metricLines = buildComparisonMetricLines(comp.base_metrics, comp.target_metrics)
+    const opinionLines = comp.ai_opinion ? splitLines(comp.ai_opinion) : []
+    const lines = [baseLine, targetLine, ...comp.highlights, ...metricLines]
     drawSectionTitle("Comparacion")
     drawList(lines)
+    if (opinionLines.length > 0) {
+      drawSectionTitle("Opinion IA")
+      drawList(opinionLines)
+    }
   }
 
   if (context?.pois) {
@@ -371,6 +377,70 @@ function buildPoiLines(context: ContextData) {
   }
 
   return lines.length > 0 ? lines : ["Sin POIs en el radio seleccionado"]
+}
+
+function buildComparisonMetricLines(
+  base?: ComparisonMetrics,
+  target?: ComparisonMetrics
+) {
+  const lines: string[] = []
+  if (base) {
+    lines.push(
+      `Base POIs: ${base.poi_total}${formatPoiCounts(base.poi_counts)}`
+    )
+    lines.push(`Base riesgo inundacion: ${base.flood_risk}`)
+    lines.push(`Base aire: ${base.air_quality}`)
+    lines.push(`Base uso del suelo: ${base.land_cover}`)
+    lines.push(`Base agua cercana: ${base.waterway}`)
+    lines.push(
+      `Base zona costera: ${
+        base.coastal === null ? "sin datos" : base.coastal ? "si" : "no"
+      }`
+    )
+    if (base.summary) {
+      lines.push(`Base resumen: ${base.summary}`)
+    }
+    if (base.recommendation) {
+      lines.push(`Base recomendacion: ${base.recommendation}`)
+    }
+  }
+  if (target) {
+    lines.push(
+      `Comparado POIs: ${target.poi_total}${formatPoiCounts(target.poi_counts)}`
+    )
+    lines.push(`Comparado riesgo inundacion: ${target.flood_risk}`)
+    lines.push(`Comparado aire: ${target.air_quality}`)
+    lines.push(`Comparado uso del suelo: ${target.land_cover}`)
+    lines.push(`Comparado agua cercana: ${target.waterway}`)
+    lines.push(
+      `Comparado zona costera: ${
+        target.coastal === null ? "sin datos" : target.coastal ? "si" : "no"
+      }`
+    )
+    if (target.summary) {
+      lines.push(`Comparado resumen: ${target.summary}`)
+    }
+    if (target.recommendation) {
+      lines.push(`Comparado recomendacion: ${target.recommendation}`)
+    }
+  }
+  return lines
+}
+
+function formatPoiCounts(counts: Record<string, number>) {
+  const entries = Object.entries(counts)
+    .filter(([, value]) => typeof value === "number" && value > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([key, value]) => `${key} ${value}`)
+  return entries.length > 0 ? ` (${entries.join(" | ")})` : ""
+}
+
+function splitLines(text: string) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
 }
 
 function buildWeatherLines(context: ContextData) {

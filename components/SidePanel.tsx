@@ -1012,9 +1012,24 @@ export default function SidePanel({
           >
             Compartir
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            onClick={handleExportReport}
+            disabled={!report}
+          >
+            <Download className="size-3" />
+            Exportar PDF
+          </Button>
           {toolbarNotice && (
             <span className="text-xs text-muted-foreground">
               {toolbarNotice}
+            </span>
+          )}
+          {exportNotice && (
+            <span className="text-xs text-muted-foreground">
+              {exportNotice}
             </span>
           )}
         </div>
@@ -1088,23 +1103,6 @@ export default function SidePanel({
                     <Badge variant="secondary">Turismo: {counts.tourism}</Badge>
                   </div>
                 )}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-xs"
-                    onClick={handleExportReport}
-                    disabled={!report}
-                  >
-                    <Download className="size-3" />
-                    Exportar informe
-                  </Button>
-                  {exportNotice && (
-                    <span className="text-xs text-muted-foreground">
-                      {exportNotice}
-                    </span>
-                  )}
-                </div>
               </div>
 
               {isOverpassDown && (

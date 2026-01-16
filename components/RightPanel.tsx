@@ -160,32 +160,40 @@ export default function RightPanel({
   }
 
   const header = (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-white/95 px-4 py-3">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        {placeName || "Informe del lugar"}
+    <div className="sticky top-0 z-20 border-b bg-white/95 px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 text-sm font-semibold text-slate-900">
+          <span className="block truncate" title={placeName || "Informe del lugar"}>
+            {placeName || "Informe del lugar"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {exportStatus === "error" && (
+            <Badge variant="destructive" className="text-[11px]">
+              Error PDF
+            </Badge>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleExportPdf}
+            disabled={!report || exportStatus === "loading"}
+            className="h-7 shrink-0 px-2 text-xs"
+          >
+            <Download className="size-3" />
+            {exportStatus === "loading" ? "Exportando..." : "Exportar PDF"}
+          </Button>
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        {sources.map((chip) => (
-          <Badge key={chip} variant="outline" className="text-[11px]">
-            {chip}
-          </Badge>
-        ))}
-        {exportStatus === "error" && (
-          <Badge variant="destructive" className="text-[11px]">
-            Error PDF
-          </Badge>
-        )}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleExportPdf}
-          disabled={!report || exportStatus === "loading"}
-          className="h-7 px-2 text-xs"
-        >
-          <Download className="size-3" />
-          {exportStatus === "loading" ? "Exportando..." : "Exportar PDF"}
-        </Button>
-      </div>
+      {sources.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {sources.map((chip) => (
+            <Badge key={chip} variant="outline" className="text-[11px]">
+              {chip}
+            </Badge>
+          ))}
+        </div>
+      )}
     </div>
   )
 

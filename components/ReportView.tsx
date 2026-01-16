@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { type ContextData } from "@/lib/types"
+import { type ComparisonMetrics, type ContextData } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const sectionClass = "space-y-2"
@@ -505,6 +505,37 @@ export default function ReportView({
               </ul>
             )}
           </div>
+
+          {(context.comparison.base_metrics ||
+            context.comparison.target_metrics) && (
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {context.comparison.base_metrics && (
+                <Card className="p-3 text-xs text-muted-foreground">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Base: {context.comparison.base.name || "Punto base"}
+                  </div>
+                  {renderComparisonMetrics(context.comparison.base_metrics)}
+                </Card>
+              )}
+              {context.comparison.target_metrics && (
+                <Card className="p-3 text-xs text-muted-foreground">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Comparado: {context.comparison.target.name || "Punto comparado"}
+                  </div>
+                  {renderComparisonMetrics(context.comparison.target_metrics)}
+                </Card>
+              )}
+            </div>
+          )}
+
+          <div className="mt-3 rounded-lg border bg-white p-3 text-xs text-muted-foreground">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Opinion IA
+            </div>
+            {context.comparison.ai_opinion
+              ? renderMultiline(context.comparison.ai_opinion)
+              : "La IA no ha generado una opinion comparativa."}
+          </div>
         </section>
       )}
 
@@ -545,6 +576,36 @@ function renderMultiline(text: string) {
       {lines.map((line, index) => (
         <p key={`${line}-${index}`}>{line}</p>
       ))}
+    </div>
+  )
+}
+
+function renderComparisonMetrics(metrics: ComparisonMetrics) {
+  const countsLine = formatPoiCounts(metrics.poi_counts)
+  return (
+    <div className="mt-2 space-y-1">
+      <div>
+        POIs: {metrics.poi_total}
+        {countsLine ? ` (${countsLine})` : ""}
+      </div>
+      <div>Riesgo inundacion: {metrics.flood_risk}</div>
+      <div>Aire: {metrics.air_quality}</div>
+      <div>Uso del suelo: {metrics.land_cover}</div>
+      <div>Agua cercana: {metrics.waterway}</div>
+      <div>
+        Zona costera:{" "}
+        {metrics.coastal === null ? "sin datos" : metrics.coastal ? "si" : "no"}
+      </div>
+      {metrics.summary && (
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          Resumen: {metrics.summary}
+        </div>
+      )}
+      {metrics.recommendation && (
+        <div className="text-[11px] text-muted-foreground">
+          Recomendacion: {metrics.recommendation}
+        </div>
+      )}
     </div>
   )
 }
@@ -596,6 +657,15 @@ function formatLanduseCounts(counts: Record<string, number>) {
     .slice(0, 5)
     .map(([key, value]) => `${key} (${value})`)
   return entries.length > 0 ? entries.join(" | ") : "Sin datos"
+}
+
+function formatPoiCounts(counts: Record<string, number>) {
+  const entries = Object.entries(counts)
+    .filter(([, value]) => typeof value === "number" && value > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([key, value]) => `${key} ${value}`)
+  return entries.length > 0 ? entries.join(" | ") : ""
 }
 
 function truncateText(text: string, limit: number) {

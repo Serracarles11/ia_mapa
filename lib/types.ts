@@ -198,6 +198,21 @@ export type ComparisonSummary = {
   }
   highlights: string[]
   created_at: string
+  base_metrics?: ComparisonMetrics
+  target_metrics?: ComparisonMetrics
+  ai_opinion?: string | null
+}
+
+export type ComparisonMetrics = {
+  poi_total: number
+  poi_counts: Record<string, number>
+  flood_risk: string
+  air_quality: string
+  land_cover: string
+  waterway: string
+  coastal: boolean | null
+  summary?: string | null
+  recommendation?: string | null
 }
 
 export type RiskLayerInfo = {

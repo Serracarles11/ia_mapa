@@ -131,6 +131,10 @@ export default function MapInner({
   const [compareStatus, setCompareStatus] = useState<
     "idle" | "loading" | "error"
   >("idle")
+  const [compareAiStatus, setCompareAiStatus] = useState<
+    "idle" | "loading" | "error"
+  >("idle")
+  const [comparePoint, setComparePoint] = useState<[number, number] | null>(null)
   const [compareError, setCompareError] = useState<string | null>(null)
   const [aircraftStatus, setAircraftStatus] = useState<AircraftStatus>({
     state: "idle",
@@ -210,6 +214,8 @@ export default function MapInner({
       setCompareMode(false)
       setCompareStatus("idle")
       setCompareError(null)
+      setCompareAiStatus("idle")
+      setComparePoint(null)
 
       setStatus("loading")
       setErrorMessage(null)
@@ -373,6 +379,8 @@ export default function MapInner({
 
     setCompareStatus("loading")
     setCompareError(null)
+    setCompareAiStatus("idle")
+    setComparePoint([lat, lon])
 
     try {
       const res = await fetch("/api/analyze-place", {
@@ -403,20 +411,91 @@ export default function MapInner({
         panelData.placeName,
         data.placeName ?? null
       )
+      const baseReport = panelData.report
+      const targetReport = data.aiReport ?? data.fallbackReport ?? null
+      const enrichMetrics = (metrics: typeof summary.base_metrics, report: AiReport | null) =>
+        metrics
+          ? {
+              ...metrics,
+              summary: report?.descripcion_zona ?? null,
+              recommendation: report?.recomendacion_final ?? null,
+            }
+          : metrics
+
+      const enrichedSummary = {
+        ...summary,
+        base_metrics: enrichMetrics(summary.base_metrics, baseReport),
+        target_metrics: enrichMetrics(summary.target_metrics, targetReport),
+        ai_opinion: null,
+      }
 
       setPanelData((prev) => ({
         ...prev,
-        context: prev.context ? { ...prev.context, comparison: summary } : prev.context,
+        context: prev.context
+          ? { ...prev.context, comparison: enrichedSummary }
+          : prev.context,
       }))
       setCompareStatus("idle")
       setCompareMode(false)
       toast.success("Comparacion lista")
+
+      if (enrichedSummary.base_metrics && enrichedSummary.target_metrics) {
+        setCompareAiStatus("loading")
+        try {
+          const aiRes = await fetch("/api/compare-places", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              base: {
+                name: enrichedSummary.base.name,
+                coords: enrichedSummary.base.coords,
+                radius_m: enrichedSummary.base.radius_m,
+                metrics: enrichedSummary.base_metrics,
+              },
+              target: {
+                name: enrichedSummary.target.name,
+                coords: enrichedSummary.target.coords,
+                radius_m: enrichedSummary.target.radius_m,
+                metrics: enrichedSummary.target_metrics,
+              },
+            }),
+          })
+
+          if (requestId !== compareRequestIdRef.current) return
+          if (aiRes.ok) {
+            const aiData = (await aiRes.json()) as { opinion?: string }
+            if (aiData.opinion) {
+              setPanelData((prev) => ({
+                ...prev,
+                context: prev.context?.comparison
+                  ? {
+                      ...prev.context,
+                      comparison: {
+                        ...prev.context.comparison,
+                        ai_opinion: aiData.opinion,
+                      },
+                    }
+                  : prev.context,
+              }))
+              setCompareAiStatus("idle")
+            } else {
+              setCompareAiStatus("error")
+            }
+          } else {
+            setCompareAiStatus("error")
+          }
+        } catch {
+          if (requestId !== compareRequestIdRef.current) return
+          setCompareAiStatus("error")
+        }
+      }
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return
       if (requestId !== compareRequestIdRef.current) return
       setCompareStatus("error")
       setCompareMode(false)
       setCompareError("No se pudo comparar los sitios.")
+      setCompareAiStatus("error")
       toast.error("No se pudo comparar")
     }
   }
@@ -516,6 +595,8 @@ export default function MapInner({
     setCompareMode(false)
     setCompareStatus("idle")
     setCompareError(null)
+    setCompareAiStatus("idle")
+    setComparePoint(null)
     setAircraftStatus({ state: "idle", count: 0 })
     setPanelData({
       placeName: null,
@@ -735,6 +816,8 @@ export default function MapInner({
                           if (compareMode) {
                             setCompareMode(false)
                             setCompareStatus("idle")
+                            setCompareAiStatus("idle")
+                            setComparePoint(null)
                             return
                           }
                           setPanelData((prev) => ({
@@ -745,6 +828,8 @@ export default function MapInner({
                           }))
                           setCompareMode(true)
                           setCompareError(null)
+                          setCompareAiStatus("idle")
+                          setComparePoint(null)
                           toast("Selecciona el segundo punto para comparar.")
                         }}
                         disabled={!canCompare || compareStatus === "loading"}
@@ -785,6 +870,8 @@ export default function MapInner({
             {(compareMode ||
               comparison ||
               compareStatus === "loading" ||
+              compareAiStatus === "loading" ||
+              compareAiStatus === "error" ||
               compareError) && (
               <div className="mt-3 space-y-2">
                 {compareMode && (
@@ -795,6 +882,16 @@ export default function MapInner({
                 {compareStatus === "loading" && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     Comparando sitios...
+                  </div>
+                )}
+                {compareAiStatus === "loading" && (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+                    IA comparando lugares...
+                  </div>
+                )}
+                {compareAiStatus === "error" && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    No se pudo generar la comparacion IA.
                   </div>
                 )}
                 {compareError && (
@@ -824,6 +921,8 @@ export default function MapInner({
                         }))
                         setCompareStatus("idle")
                         setCompareError(null)
+                        setCompareAiStatus("idle")
+                        setComparePoint(null)
                       }}
                     >
                       Quitar comparacion
@@ -1044,6 +1143,14 @@ export default function MapInner({
                     </>
                   )}
 
+                  {comparePoint && (
+                    <Marker position={comparePoint}>
+                      <LeafletTooltip direction="top" offset={[0, -10]}>
+                        Punto comparado
+                      </LeafletTooltip>
+                    </Marker>
+                  )}
+
                   {comparison && (
                     <>
                       <Polyline
@@ -1065,16 +1172,6 @@ export default function MapInner({
                           fillOpacity: 0.2,
                         }}
                       />
-                      <Marker
-                        position={[
-                          comparison.target.coords.lat,
-                          comparison.target.coords.lon,
-                        ]}
-                      >
-                        <LeafletTooltip direction="top" offset={[0, -10]}>
-                          Punto comparado
-                        </LeafletTooltip>
-                      </Marker>
                     </>
                   )}
 
