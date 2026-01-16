@@ -31,6 +31,7 @@ export async function riesgoInundacion(
     if (efasResult.hits.length === 0) {
       return {
         ok: true,
+        status: "VISUAL_ONLY",
         source: "Copernicus",
         risk_level: "desconocido",
         details:
@@ -42,6 +43,7 @@ export async function riesgoInundacion(
 
     return {
       ok: true,
+      status: "OK",
       source: "Copernicus",
       risk_level: "desconocido",
       details: efasResult.details,
@@ -87,6 +89,7 @@ export async function riesgoInundacion(
     if (efasAvailable) {
       return {
         ok: true,
+        status: "VISUAL_ONLY",
         source: "Copernicus",
         risk_level: "desconocido",
         details:
@@ -97,6 +100,7 @@ export async function riesgoInundacion(
 
     return {
       ok: false,
+      status: "DOWN",
       source: "MITECO",
       risk_level: "desconocido",
       details: "Servicio no disponible",
@@ -107,6 +111,7 @@ export async function riesgoInundacion(
   if (hits.length === 0) {
     return {
       ok: true,
+      status: "OK",
       source: "MITECO",
       risk_level: "bajo",
       details: "No se detectan zonas inundables en el punto consultado.",
@@ -125,6 +130,7 @@ export async function riesgoInundacion(
 
   const response: FloodRiskInfo = {
     ok: true,
+    status: "OK",
     source: "MITECO",
     risk_level: riskLevel,
     details,

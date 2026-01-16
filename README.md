@@ -1,4 +1,4 @@
-IA Maps es una app Next.js (App Router) que analiza un punto del mapa con OpenStreetMap, Copernicus (CLC/EFAS/CAMS) e IGN.
+IA Maps es una app Next.js (App Router) que analiza un punto del mapa con OpenStreetMap, Copernicus (CLC/EFAS/CAMS), IGN, Wikidata, Wikipedia, Open-Meteo y Geoapify.
 
 ## Getting Started
 
@@ -20,6 +20,10 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 - Copia `.env.local.example` a `.env.local`.
 - Completa `GROQ_API_KEY` si quieres IA Groq.
+- Completa `GEOAPIFY_API_KEY` para enriquecer POIs cuando Overpass cae.
+- Wikipedia y Open-Meteo no requieren key; puedes ajustar endpoints con `WIKIPEDIA_API_URL` y `OPEN_METEO_API_URL`.
+- (Opcional) `OPEN_SKY_USERNAME` y `OPEN_SKY_PASSWORD` para mejorar limites de OpenSky.
+- (Opcional) `NEXT_PUBLIC_AIRCRAFT_REFRESH_MS` para ajustar el refresco ADS-B.
 - Las capas Copernicus/EFAS/CAMS funcionan con endpoints publicos; el token es opcional.
 
 ### Capas disponibles
@@ -28,17 +32,27 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 - Aire: Copernicus CAMS (WMS) con capa PM2.5.
 - Uso del suelo: Copernicus CLC 2018.
 - Base cartografica: OSM / IGN / PNOA.
+- Aviones: OpenSky (tiempo real) alrededor del punto, con modo demo si hay rate limit.
+
+### Funciones destacadas
+
+- Comparar dos sitios y anadir la comparacion al informe.
+- Contexto ampliado con Wikidata + Geoapify + resumen OSM de usos del suelo.
+- Meteorologia actual (Open-Meteo) y Wikipedia cercana para dar mas contexto del lugar.
+- Informe determinista si la IA falla o devuelve JSON invalido.
 
 ### Limitaciones
 
 - EFAS/CAMS son capas WMS; el muestreo puntual puede no estar disponible. En ese caso se indica "capa visual".
-- Overpass puede estar temporalmente caido; la app mantiene el ultimo informe valido.
+- Overpass puede estar temporalmente caido; se usan fuentes alternativas (Wikidata/Geoapify/CLC/IGN).
+- OpenSky puede rate-limit; en ese caso se muestran datos demo.
 
 ### Rutas API
 
 - `POST /api/analyze-place`: analiza un punto y devuelve contexto ampliado.
 - `POST /api/place-chat`: chat con herramientas basadas en OSM.
 - `POST /api/export-pdf`: exporta el informe visible en PDF.
+- `POST /api/aircraft`: trafico aereo en tiempo real alrededor del punto.
 
 ## Learn More
 

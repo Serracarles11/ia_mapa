@@ -15,6 +15,7 @@ export type LayerState = {
   clc: boolean
   flood: boolean
   air: boolean
+  aircraft: boolean
 }
 
 export type LayerKey = keyof LayerState
@@ -24,7 +25,7 @@ type LayerControlsProps = {
   onToggle: (layer: LayerKey, next: boolean) => void
   floodDisabled?: boolean
   floodHint?: string
-  floodStatus?: "OK" | "DOWN" | null
+  floodStatus?: "OK" | "DOWN" | "VISUAL_ONLY" | null
   airDisabled?: boolean
   airHint?: string
   airStatus?: "OK" | "DOWN" | "VISUAL_ONLY" | null
@@ -97,6 +98,8 @@ export default function LayerControls({
   const floodDescription =
     floodStatus === "DOWN"
       ? "Capa inundacion no disponible (fuente caida)"
+      : floodStatus === "VISUAL_ONLY"
+        ? "Capa inundacion solo visual"
       : "Zonas inundables oficiales (WMS)"
   const airDescription =
     airStatus === "DOWN"
@@ -146,6 +149,12 @@ export default function LayerControls({
         onChange={(value) => onToggle("air", value)}
         disabled={airDisabled}
         tooltip={airHint}
+      />
+      <SwitchRow
+        label="Aviones (ADS-B)"
+        description="Trafico aereo alrededor del punto"
+        checked={layers.aircraft}
+        onChange={(value) => onToggle("aircraft", value)}
       />
     </div>
   )

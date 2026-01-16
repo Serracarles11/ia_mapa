@@ -479,25 +479,6 @@ function getEffectiveReport(data: SidePanelData) {
   return data.report
 }
 
-function hasPois(context: ContextData | null) {
-  if (!context) return false
-  const pois = context.pois
-  return (
-    pois.restaurants.length > 0 ||
-    pois.bars_and_clubs.length > 0 ||
-    pois.cafes.length > 0 ||
-    pois.pharmacies.length > 0 ||
-    pois.hospitals.length > 0 ||
-    pois.schools.length > 0 ||
-    pois.supermarkets.length > 0 ||
-    pois.transport.length > 0 ||
-    pois.hotels.length > 0 ||
-    pois.tourism.length > 0 ||
-    pois.museums.length > 0 ||
-    pois.viewpoints.length > 0
-  )
-}
-
 function buildPoiKey(item: PoiItem, key: string, index: number) {
   return `${key}-${item.name}-${item.distance_m}-${item.type ?? "poi"}-${index}`
 }

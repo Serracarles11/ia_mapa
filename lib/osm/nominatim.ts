@@ -16,6 +16,19 @@ export type NominatimReverseResult = {
   type: string | null
   address_line?: string | null
   municipality?: string | null
+  address?: {
+    house_number: string | null
+    road: string | null
+    neighbourhood: string | null
+    suburb: string | null
+    city_district: string | null
+    county: string | null
+    state: string | null
+    state_district: string | null
+    region: string | null
+    postcode: string | null
+    country: string | null
+  }
 }
 
 const DEFAULT_BASE_URL = "https://nominatim.openstreetmap.org"
@@ -105,6 +118,21 @@ export async function reverseGeocode(
     type: getString(data.type) || null,
     address_line: getString(data.display_name) || null,
     municipality: municipality ?? null,
+    address: address
+      ? {
+          house_number: getString(address.house_number),
+          road: getString(address.road),
+          neighbourhood: getString(address.neighbourhood),
+          suburb: getString(address.suburb),
+          city_district: getString(address.city_district),
+          county: getString(address.county),
+          state: getString(address.state),
+          state_district: getString(address.state_district),
+          region: getString(address.region),
+          postcode: getString(address.postcode),
+          country: getString(address.country),
+        }
+      : undefined,
   }
 }
 

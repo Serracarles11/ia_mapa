@@ -154,9 +154,9 @@ export default function ChatView({
 
       setInput("")
       setStatus("idle")
-    } catch (err) {
+    } catch {
       setStatus("idle")
-      setError(null)
+      setError("No se pudo enviar la pregunta.")
     }
   }
 

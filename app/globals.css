@@ -46,3 +46,14 @@
     color: hsl(var(--foreground));
   }
 }
+
+.aircraft-icon {
+  background: transparent;
+  border: none;
+}
+
+.aircraft-marker {
+  width: 18px;
+  height: 18px;
+  transform-origin: center;
+}

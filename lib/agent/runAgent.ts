@@ -1,5 +1,7 @@
 import "server-only"
 
+import { z } from "zod"
+
 import { callLlm, safeJsonParse, type LlmMessage, type LlmTool } from "@/lib/llm"
 import { buscarCoordenadas } from "@/lib/tools/buscarCoordenadas"
 import { capasUrbanismo, type CapasUrbanismoResult } from "@/lib/tools/capasUrbanismo"
@@ -26,6 +28,18 @@ type AgentResult = {
   airQuality: AirQualityInfo | null
   warnings: string[]
 }
+
+const reportSchema = z
+  .object({
+    descripcion_zona: z.string().min(1),
+    infraestructura_cercana: z.string().min(1),
+    riesgos: z.string().min(1),
+    usos_urbanos: z.string().min(1),
+    recomendacion_final: z.string().min(1),
+    fuentes: z.array(z.string()),
+    limitaciones: z.array(z.string()),
+  })
+  .strict()
 
 export async function runAgent(
   baseContext: ContextData,
@@ -227,7 +241,7 @@ function buildSystemPrompt() {
   return [
     "Eres un analista geoespacial. Responde SIEMPRE en castellano.",
     "Usa SOLO el contexto y las herramientas si necesitas mas datos. No inventes.",
-    "Redacta con opinion profesional y recomendaciones claras basadas en los datos.",
+    "Toda afirmacion debe estar respaldada por datos del contexto.",
     "Si faltan datos, indicalo en limitaciones sin frases de incapacidad.",
     "Devuelve SOLO un JSON valido con este esquema:",
     "{",
@@ -239,7 +253,7 @@ function buildSystemPrompt() {
     '  "fuentes": string[],',
     '  "limitaciones": string[]',
     "}",
-    "Incluye limitaciones reales si faltan datos.",
+    "Incluye SOLO fuentes reales de context.sources y SOLO limitaciones reales.",
   ].join("\n")
 }
 
@@ -253,39 +267,7 @@ function buildUserPrompt(context: ContextData, placeName: string | null) {
 }
 
 function normalizeReport(value: unknown): AiReport | null {
-  if (!value || typeof value !== "object") return null
-  const raw = value as Record<string, unknown>
-
-  const descripcion = getString(raw.descripcion_zona)
-  const infraestructura = getString(raw.infraestructura_cercana)
-  const riesgos = getString(raw.riesgos)
-  const usos = getString(raw.usos_urbanos)
-  const recomendacion = getString(raw.recomendacion_final)
-  const fuentes = getStringArray(raw.fuentes)
-  const limitaciones = getStringArray(raw.limitaciones)
-
-  if (!descripcion || !infraestructura || !riesgos || !usos || !recomendacion) {
-    return null
-  }
-
-  return {
-    descripcion_zona: descripcion,
-    infraestructura_cercana: infraestructura,
-    riesgos,
-    usos_urbanos: usos,
-    recomendacion_final: recomendacion,
-    fuentes,
-    limitaciones,
-  }
-}
-
-function getString(value: unknown): string | null {
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  return trimmed.length > 0 ? trimmed : null
-}
-
-function getStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item) => typeof item === "string" && item.trim().length > 0)
+  const parsed = reportSchema.safeParse(value)
+  if (!parsed.success) return null
+  return parsed.data
 }

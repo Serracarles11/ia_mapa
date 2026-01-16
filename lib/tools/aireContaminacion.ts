@@ -31,8 +31,10 @@ export async function aireContaminacion(
     if (available) {
       return {
         ok: true,
+        status: "VISUAL_ONLY",
         source: "Copernicus",
         metric: config.metric ?? "CAMS",
+        unit: config.units ?? null,
         units: config.units ?? null,
         details:
           "Capa CAMS disponible para visualizacion. No se pudo muestrear el valor.",
@@ -42,8 +44,10 @@ export async function aireContaminacion(
 
     return {
       ok: false,
+      status: "DOWN",
       source: "Copernicus",
       metric: config.metric ?? "CAMS",
+      unit: config.units ?? null,
       units: config.units ?? null,
       details: "Servicio CAMS no disponible",
       layer: layer,
@@ -52,23 +56,28 @@ export async function aireContaminacion(
 
   const parsed = parseFeatureInfo(result)
   if (parsed.value !== null) {
-    const units = config.units ?? parsed.units ?? null
+    const unit = config.units ?? parsed.units ?? null
     const valueText = `${parsed.value}`
     return {
       ok: true,
+      status: "OK",
       source: "Copernicus",
       metric: config.metric ?? parsed.metric ?? "CAMS",
-      units,
-      details: `Valor estimado: ${valueText}${units ? ` ${units}` : ""}`,
+      unit,
+      units: unit,
+      details: `Valor estimado: ${valueText}${unit ? ` ${unit}` : ""}`,
       layer: layer,
+      value: parsed.value,
       raw: parsed.raw,
     }
   }
 
   return {
     ok: true,
+    status: "VISUAL_ONLY",
     source: "Copernicus",
     metric: config.metric ?? "CAMS",
+    unit: config.units ?? null,
     units: config.units ?? null,
     details:
       "Capa CAMS disponible para visualizacion. No se pudo extraer valor puntual.",

@@ -30,7 +30,7 @@ export type RightPanelProps = {
   requestId: number | null
   floodOk: boolean | null
   floodError: string | null
-  floodStatus: "OK" | "DOWN" | null
+  floodStatus: "OK" | "DOWN" | "VISUAL_ONLY" | null
   airOk: boolean | null
   airError: string | null
   airStatus: "OK" | "DOWN" | "VISUAL_ONLY" | null
@@ -78,7 +78,9 @@ export default function RightPanel({
     ? "Selecciona un punto para habilitar la capa."
     : floodServiceOk === false
       ? floodError || "Capa inundacion no disponible (fuente caida)."
-      : "Capa oficial de inundacion (WMS)."
+      : floodStatus === "VISUAL_ONLY"
+        ? "Capa inundacion disponible solo como visual."
+        : "Capa oficial de inundacion (WMS)."
   const airServiceOk =
     typeof airOk === "boolean" ? airOk : context?.air_quality?.ok ?? null
   const airDisabled = !context || airServiceOk === false
@@ -86,7 +88,9 @@ export default function RightPanel({
     ? "Selecciona un punto para habilitar la capa."
     : airServiceOk === false
       ? airError || "Servicio CAMS no disponible."
-      : "Capa CAMS (calidad del aire)."
+      : airStatus === "VISUAL_ONLY"
+        ? "Capa CAMS solo visual."
+        : "Capa CAMS (calidad del aire)."
 
   const sources = useMemo(() => {
     const chips: string[] = []
@@ -98,6 +102,18 @@ export default function RightPanel({
     }
     if (context?.sources.ign.layers.length || context?.sources.ign.flood_wms) {
       chips.push("IGN")
+    }
+    if (context?.sources.wikidata) {
+      chips.push("Wikidata")
+    }
+    if (context?.sources.wikipedia) {
+      chips.push("Wikipedia")
+    }
+    if (context?.sources.geoapify) {
+      chips.push("Geoapify")
+    }
+    if (context?.sources.open_meteo) {
+      chips.push("Open-Meteo")
     }
     return chips
   }, [context?.sources])
@@ -220,15 +236,14 @@ export default function RightPanel({
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 bg-white/90 shadow-sm backdrop-blur">
         {header}
         {summary}
-        <div className="p-4">
-          <Accordion type="single" collapsible defaultValue="informe" className="space-y-3">
-            <AccordionItem value="informe">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <Accordion className="space-y-3">
+            <AccordionItem value="informe" open>
               <AccordionTrigger>Informe</AccordionTrigger>
               <AccordionContent>
                 <ReportView
                   status={status}
                   report={report}
-                  aiReport={aiReport}
                   context={context}
                   placeName={placeName}
                   coords={coords}
@@ -298,7 +313,6 @@ export default function RightPanel({
             <ReportView
               status={status}
               report={report}
-              aiReport={aiReport}
               context={context}
               placeName={placeName}
               coords={coords}
@@ -381,6 +395,18 @@ function SourcesView({ context }: { context: ContextData | null }) {
   if (context.sources.ign.flood_wms) {
     sources.push("MITECO WMS (zonas inundables)")
   }
+  if (context.sources.wikidata) {
+    sources.push("Wikidata")
+  }
+  if (context.sources.wikipedia) {
+    sources.push("Wikipedia")
+  }
+  if (context.sources.geoapify) {
+    sources.push("Geoapify Places")
+  }
+  if (context.sources.open_meteo) {
+    sources.push("Open-Meteo (meteorologia)")
+  }
 
   return (
     <div className="space-y-2">
@@ -399,4 +425,46 @@ function SourcesView({ context }: { context: ContextData | null }) {
       ))}
     </div>
   )
+}
+
+function getAirLabel(context: ContextData) {
+  const air = context.air_quality
+  if (!air) return "CAMS no disponible"
+  if (air.status === "VISUAL_ONLY") return "CAMS visual"
+  if (air.ok) return "CAMS disponible"
+  return "CAMS no disponible"
+}
+
+function getAirDetails(context: ContextData) {
+  const air = context.air_quality
+  if (!air) return "Sin datos CAMS."
+  if (air.value != null) {
+    const unit = air.unit ?? air.units
+    return `Valor puntual: ${air.value}${unit ? ` ${unit}` : ""}.`
+  }
+  return air.details ?? "Sin datos CAMS."
+}
+
+function getFloodLabel(context: ContextData) {
+  const flood = context.flood_risk
+  if (!flood) return "Desconocido"
+  if (flood.risk_level === "alto") return "Alto"
+  if (flood.risk_level === "medio") return "Medio"
+  if (flood.risk_level === "bajo") return "Bajo"
+  return "Desconocido"
+}
+
+function getFloodDetails(context: ContextData) {
+  const flood = context.flood_risk
+  if (!flood) return "Sin datos de inundacion disponibles."
+  return flood.details ?? "Sin datos de inundacion disponibles."
+}
+
+function getWaterwaySummary(context: ContextData) {
+  const list = context.environment.nearest_waterways
+  if (!list || list.length === 0) return null
+  return list
+    .slice(0, 2)
+    .map((item) => `${item.name || item.type} (${item.distance_m} m)`)
+    .join(" | ")
 }
