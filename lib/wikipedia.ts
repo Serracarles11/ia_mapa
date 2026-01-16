@@ -59,7 +59,7 @@ export async function fetchWikipediaNearby(
   )
 
   const results = geoItems
-    .map((item) => {
+    .map((item): WikipediaNearbyItem | null => {
       const page = pageMap.get(item.pageid)
       const title = page?.title || item.title
       if (!title) return null
@@ -121,7 +121,7 @@ async function fetchGeoSearch(
     : []
 
   return list
-    .map((item) => {
+    .map((item): GeoSearchItem | null => {
       const pageid = toNumber(item.pageid)
       const title = typeof item.title === "string" ? item.title : ""
       const latValue = toNumber(item.lat)

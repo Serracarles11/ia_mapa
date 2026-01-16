@@ -143,8 +143,10 @@ function parseSparqlResult(data: unknown): WikidataInfo | null {
 
   const label = row.itemLabel?.value ?? null
   const description = row.itemDescription?.value ?? null
+  const distValue = row.dist?.value
+  const distParsed = distValue != null ? toNumber(distValue) : null
   const distance_m =
-    row.dist?.value != null ? Math.round(toNumber(row.dist.value) * 1000) : null
+    distParsed != null ? Math.round(distParsed * 1000) : null
   const types = splitPipe(row.types?.value)
   const admin_areas = splitPipe(row.admins?.value)
   const aliases = splitPipe(row.aliases?.value)
@@ -197,18 +199,19 @@ function parseNearbyList(data: unknown): WikidataNearbyItem[] {
   const bindings = extractBindings(data)
   if (!bindings || bindings.length === 0) return []
   return bindings
-    .map((row) => {
+    .map((row): WikidataNearbyItem | null => {
       const id = extractId(row.item?.value)
       if (!id) return null
       const wikidata_url = `https://www.wikidata.org/wiki/${id}`
+      const distValue = row.dist?.value
+      const distParsed = distValue != null ? toNumber(distValue) : null
+      const distance_m =
+        distParsed != null ? Math.round(distParsed * 1000) : null
       return {
         id,
         label: row.itemLabel?.value ?? null,
         description: row.itemDescription?.value ?? null,
-        distance_m:
-          row.dist?.value != null
-            ? Math.round(toNumber(row.dist.value) * 1000)
-            : null,
+        distance_m,
         wikipedia_url: row.article?.value ?? null,
         wikidata_url,
         types: splitPipe(row.types?.value),

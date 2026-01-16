@@ -71,7 +71,11 @@ export default function AircraftLayer({
 
     if (centerLat == null || centerLon == null) {
       setFlights([])
-      const next = { state: "error", count: 0, notice: "Selecciona un punto." }
+      const next: AircraftStatus = {
+        state: "error",
+        count: 0,
+        notice: "Selecciona un punto.",
+      }
       onStatusChange?.(next)
       return
     }

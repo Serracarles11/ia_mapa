@@ -238,7 +238,7 @@ export default function RightPanel({
         {summary}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <Accordion className="space-y-3">
-            <AccordionItem value="informe" open>
+            <AccordionItem open>
               <AccordionTrigger>Informe</AccordionTrigger>
               <AccordionContent>
                 <ReportView
@@ -255,7 +255,7 @@ export default function RightPanel({
                 />
               </AccordionContent>
             </AccordionItem>
-            <AccordionItem value="capas">
+            <AccordionItem>
               <AccordionTrigger>Capas</AccordionTrigger>
               <AccordionContent>
                 <LayerControls
@@ -270,7 +270,7 @@ export default function RightPanel({
                 />
               </AccordionContent>
             </AccordionItem>
-            <AccordionItem value="chat">
+            <AccordionItem>
               <AccordionTrigger>Chat</AccordionTrigger>
               <AccordionContent>
                 <ChatView
@@ -284,7 +284,7 @@ export default function RightPanel({
                 />
               </AccordionContent>
             </AccordionItem>
-            <AccordionItem value="fuentes">
+            <AccordionItem>
               <AccordionTrigger>Fuentes</AccordionTrigger>
               <AccordionContent>
                 <SourcesView context={context} />

@@ -67,7 +67,9 @@ export async function POST(req: Request) {
     }
   }
 
-  const errorText = primary.error || fallback.error || "Groq no disponible"
+  const primaryError = primary.ok ? "Groq response invalid" : primary.error
+  const fallbackError = fallback.ok ? "Groq response invalid" : fallback.error
+  const errorText = primaryError || fallbackError || "Groq no disponible"
   return NextResponse.json(
     { report: buildFallbackReport(errorText) },
     { status: 200 }
@@ -151,6 +153,8 @@ function safeJsonParse(text: string) {
   }
 }
 
+type GroqResult = { ok: true; text: string } | { ok: false; error: string }
+
 async function callGroq(
   apiUrl: string,
   apiKey: string,
@@ -158,7 +162,7 @@ async function callGroq(
   system: string,
   user: string,
   maxTokens: number
-) {
+): Promise<GroqResult> {
   try {
     const response = await fetch(apiUrl, {
       method: "POST",

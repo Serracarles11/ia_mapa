@@ -34,10 +34,9 @@ export function buildFallbackReport(
   const externalHighlights = pickExternalHighlights(external_pois ?? [])
 
   const counts = buildCounts(pois)
-  const totalPois = Object.values(counts).reduce(
-    (sum, value) => sum + (typeof value === "number" ? value : 0),
-    0
-  )
+  const totalPois = Object.values(counts)
+    .filter((value): value is number => typeof value === "number")
+    .reduce((sum, value) => sum + value, 0)
   const densityLabel =
     totalPois >= 30 ? "alta" : totalPois >= 12 ? "media" : "baja"
   const topPois = pickTopPois(pois, 6)

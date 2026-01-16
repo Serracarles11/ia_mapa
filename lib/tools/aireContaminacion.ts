@@ -124,14 +124,14 @@ function parseFeatureInfo(result: {
 function extractNumeric(props: Record<string, unknown>) {
   for (const [key, value] of Object.entries(props)) {
     if (typeof value === "number" && Number.isFinite(value)) {
-      return { value, metric: key }
+      return { value, metric: key, units: null }
     }
     if (typeof value === "string") {
       const match = value.match(/-?\\d+(?:\\.\\d+)?/)
       if (match) {
         const parsed = Number(match[0])
         if (Number.isFinite(parsed)) {
-          return { value: parsed, metric: key }
+          return { value: parsed, metric: key, units: null }
         }
       }
     }

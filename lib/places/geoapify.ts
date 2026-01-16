@@ -40,7 +40,7 @@ export async function fetchGeoapifyPlaces(
 function normalizeFeature(feature: {
   properties?: Record<string, unknown>
   geometry?: { coordinates?: [number, number] }
-}) {
+}): ExternalPoi | null {
   const props = feature.properties ?? {}
   const name =
     typeof props.name === "string"

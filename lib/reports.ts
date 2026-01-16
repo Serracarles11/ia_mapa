@@ -1,5 +1,5 @@
 import "server-only"
-import { supabaseAdmin } from "@/lib/supabase"
+import { getSupabaseAdmin } from "@/lib/supabase"
 
 // Shared server-side helpers for ai_reports.
 export type AiReportInsert = {
@@ -11,6 +11,7 @@ export type AiReportInsert = {
 }
 
 export async function saveAiReport(payload: AiReportInsert) {
+  const supabaseAdmin = getSupabaseAdmin()
   const { error } = await supabaseAdmin.from("ai_reports").insert(payload)
   if (error) {
     throw error
@@ -18,6 +19,7 @@ export async function saveAiReport(payload: AiReportInsert) {
 }
 
 export async function getRecentAiReports(limit = 20) {
+  const supabaseAdmin = getSupabaseAdmin()
   const { data, error } = await supabaseAdmin
     .from("ai_reports")
     .select("id, place_name, lat, lon, category, report, created_at")

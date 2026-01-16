@@ -77,6 +77,17 @@ export type WaterwayInfo = {
   distance_m: number
 }
 
+export type EarthquakeEvent = {
+  id: string
+  magnitude: number | null
+  place: string | null
+  title: string | null
+  time_iso: string | null
+  url: string | null
+  distance_m: number
+  coordinates: { lat: number; lon: number; depth_km: number | null }
+}
+
 export type EnvironmentInfo = {
   landuse_summary: string | null
   landuse_osm_summary?: string | null
